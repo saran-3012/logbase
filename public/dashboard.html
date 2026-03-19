@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Logbase — Dashboard</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #0f172a;
+      --surface:     #1e293b;
+      --surface2:    #263148;
+      --border:      #334155;
+      --text:        #f1f5f9;
+      --muted:       #94a3b8;
+      --accent:      #6366f1;
+      --accent-dim:  #4f46e5;
+      --error:       #ef4444;
+      --warn:        #f59e0b;
+      --info:        #3b82f6;
+      --success:     #22c55e;
+      --debug:       #6b7280;
+      --trace:       #9ca3af;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      min-height: 100vh;
+    }
+
+    /* ── Navbar ─────────────────────────────────────────────────────────── */
+    .navbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 1.5rem;
+      height: 56px;
+      gap: 1.5rem;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .nav-brand {
+      font-size: 1rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      color: var(--text);
+      text-decoration: none;
+      margin-right: .5rem;
+    }
+    .nav-brand span { color: var(--accent); font-size: 1.2rem; }
+    .nav-links { display: flex; gap: .25rem; flex: 1; }
+    .nav-link {
+      padding: .4rem .85rem;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 6px;
+      font-size: .9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+    .nav-link:hover  { background: var(--surface2); color: var(--text); }
+    .nav-link.active { background: var(--surface2); color: var(--text); }
+    .nav-right { display: flex; align-items: center; gap: 1rem; margin-left: auto; }
+    #username-display { color: var(--muted); font-size: .875rem; }
+    .btn-logout {
+      padding: .35rem .85rem;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: .85rem;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+    .btn-logout:hover { background: var(--surface2); color: var(--text); }
+
+    /* ── Layout ─────────────────────────────────────────────────────────── */
+    .main { padding: 1.75rem 1.5rem; max-width: 1400px; margin: 0 auto; }
+
+    /* ── Section titles ─────────────────────────────────────────────────── */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.25rem;
+    }
+    .section-header h2 { font-size: 1.1rem; font-weight: 700; }
+
+    /* ── Buttons ────────────────────────────────────────────────────────── */
+    .btn {
+      padding: .45rem .9rem;
+      border: none;
+      border-radius: 6px;
+      font-size: .875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background .15s, opacity .15s;
+    }
+    .btn:disabled { opacity: .55; cursor: not-allowed; }
+    .btn-primary  { background: var(--accent);  color: #fff; }
+    .btn-primary:hover  { background: var(--accent-dim); }
+    .btn-danger   { background: rgba(239,68,68,.15); color: #fca5a5; border: 1px solid rgba(239,68,68,.25); }
+    .btn-danger:hover   { background: rgba(239,68,68,.25); }
+    .btn-ghost    { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+    .btn-ghost:hover    { background: #2e3f5c; }
+    .btn-sm { padding: .3rem .65rem; font-size: .8rem; }
+    .btn.active { background: var(--accent); color: #fff; outline: 2px solid var(--accent-dim); }
+
+    /* ── Alert ──────────────────────────────────────────────────────────── */
+    .alert {
+      padding: .65rem 1rem;
+      border-radius: 6px;
+      font-size: .875rem;
+      margin-bottom: 1rem;
+    }
+    .alert-error   { background: rgba(239,68,68,.15); color: #fca5a5; border: 1px solid rgba(239,68,68,.3); }
+    .alert-success { background: rgba(34,197,94,.15);  color: #86efac; border: 1px solid rgba(34,197,94,.3); }
+    .hidden { display: none !important; }
+
+    /* ── Token form ─────────────────────────────────────────────────────── */
+    .token-form {
+      display: flex;
+      gap: .75rem;
+      align-items: flex-end;
+      margin-bottom: 1.25rem;
+    }
+    .token-form .fgroup { flex: 1; display: flex; flex-direction: column; gap: .35rem; }
+    .token-form label { font-size: .78rem; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    .token-form input {
+      padding: .55rem .85rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: .9rem;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .token-form input:focus { border-color: var(--accent); }
+
+    /* ── Table ──────────────────────────────────────────────────────────── */
+    .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); }
+    table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+    thead th {
+      background: var(--surface);
+      padding: .65rem 1rem;
+      text-align: left;
+      font-weight: 600;
+      font-size: .78rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+    tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--surface2); }
+    tbody td { padding: .65rem 1rem; color: var(--text); vertical-align: middle; }
+
+    .loading-cell, .empty-cell, .error-cell {
+      text-align: center;
+      padding: 2.5rem 1rem !important;
+      color: var(--muted);
+    }
+    .error-cell { color: #fca5a5; }
+    .muted { color: var(--muted); }
+    code { font-family: 'SF Mono', 'Fira Code', monospace; font-size: .82rem; color: #a5b4fc; }
+
+    /* ── Level badges ───────────────────────────────────────────────────── */
+    .level-badge {
+      display: inline-block;
+      padding: .15rem .55rem;
+      border-radius: 4px;
+      font-size: .75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .level-error   { background: rgba(239,68,68,.18);  color: #fca5a5; }
+    .level-warn    { background: rgba(245,158,11,.18); color: #fcd34d; }
+    .level-info    { background: rgba(59,130,246,.18); color: #93c5fd; }
+    .level-debug   { background: rgba(107,114,128,.18); color: #d1d5db; }
+    .level-trace   { background: rgba(156,163,175,.12); color: #9ca3af; }
+    .level-default { background: rgba(100,116,139,.15); color: var(--muted); }
+
+    /* ── Log viewer controls ────────────────────────────────────────────── */
+    .log-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .75rem;
+      margin-bottom: 1rem;
+      align-items: stretch;
+    }
+    .search-wrap { flex: 1; min-width: 220px; position: relative; }
+    .search-wrap input {
+      width: 100%;
+      padding: .6rem .85rem .6rem 2.25rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: .9rem;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .search-wrap input:focus { border-color: var(--accent); }
+    .search-icon {
+      position: absolute;
+      left: .75rem;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--muted);
+      font-size: .9rem;
+      pointer-events: none;
+    }
+    .filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .75rem;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .filter-row select,
+    .filter-row input[type="date"] {
+      padding: .55rem .75rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: .875rem;
+      outline: none;
+      transition: border-color .15s;
+      cursor: pointer;
+    }
+    .filter-row select:focus,
+    .filter-row input[type="date"]:focus { border-color: var(--accent); }
+    .filter-row select option { background: var(--surface); }
+    .filter-label { font-size: .78rem; color: var(--muted); font-weight: 500; }
+    .filter-group { display: flex; align-items: center; gap: .4rem; }
+    .log-stats { font-size: .8rem; color: var(--muted); margin-left: auto; }
+
+    /* ── Log table specifics ────────────────────────────────────────────── */
+    .col-time    { width: 110px; color: var(--muted); font-size: .82rem; white-space: nowrap; }
+    .col-app     { width: 130px; font-family: monospace; font-size: .82rem; color: #a5b4fc; }
+    .col-level   { width: 90px; }
+    .col-message { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .col-expand  { width: 36px; text-align: center; color: var(--muted); cursor: pointer; user-select: none; font-size: .75rem; }
+    .log-row     { cursor: pointer; }
+    .log-row.expanded { background: var(--surface2); }
+
+    /* ── Expanded row ───────────────────────────────────────────────────── */
+    .expand-row td { background: var(--bg); padding: 0 !important; }
+    .expand-content { padding: 1rem 1.25rem; border-top: 1px solid var(--border); }
+    .expand-label { font-size: .75rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .5rem; }
+    .json-view {
+      background: #0a0f1e;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: .85rem 1rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: .8rem;
+      color: #a5b4fc;
+      overflow-x: auto;
+      white-space: pre;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    /* ── Pagination ─────────────────────────────────────────────────────── */
+    #pagination {
+      display: flex;
+      gap: .35rem;
+      justify-content: center;
+      padding: 1rem 0 .5rem;
+      flex-wrap: wrap;
+    }
+    .pg-btn {
+      min-width: 34px;
+      padding: .35rem .6rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      font-size: .85rem;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .pg-btn:hover  { background: var(--surface2); }
+    .pg-btn.active { background: var(--accent); border-color: var(--accent); font-weight: 600; }
+    .pg-ellipsis   { padding: .35rem .4rem; color: var(--muted); font-size: .85rem; }
+
+    /* ── Integration snippet ────────────────────────────────────────────── */
+    .snippet-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin-top: 1.5rem;
+    }
+    .snippet-box h3 { font-size: .9rem; font-weight: 600; margin-bottom: 1rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    .snippet-select-wrap { margin-bottom: .85rem; }
+    .snippet-select-wrap select {
+      padding: .5rem .75rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: .875rem;
+      outline: none;
+    }
+    .snippet-tabs { display: flex; gap: .4rem; margin-bottom: .6rem; }
+    .snippet-tab {
+      padding: .3rem .75rem;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: transparent;
+      color: var(--muted);
+      font-size: .82rem;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+    .snippet-tab.active { background: var(--surface2); color: var(--text); }
+    .snippet-pane pre {
+      background: #0a0f1e;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: .85rem 1rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: .8rem;
+      color: #a5b4fc;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    /* ── Token modal ────────────────────────────────────────────────────── */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.65);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      padding: 1rem;
+    }
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.75rem;
+      max-width: 520px;
+      width: 100%;
+    }
+    .modal h3 { font-size: 1rem; font-weight: 700; margin-bottom: .5rem; }
+    .modal p  { color: var(--muted); font-size: .875rem; margin-bottom: 1rem; }
+    .token-display {
+      background: #0a0f1e;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: .85rem 1rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: .825rem;
+      color: #86efac;
+      word-break: break-all;
+      margin-bottom: 1rem;
+    }
+    .modal-actions { display: flex; gap: .75rem; justify-content: flex-end; }
+
+    /* ── Divider ────────────────────────────────────────────────────────── */
+    .divider { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <nav class="navbar">
+    <a class="nav-brand" href="/dashboard.html">
+      <svg width="22" height="22" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0">
+        <rect width="30" height="30" rx="6" fill="#6366f1"/>
+        <rect x="4" y="5"  width="22" height="5" rx="2.5" fill="white"/>
+        <rect x="4" y="12" width="16" height="5" rx="2.5" fill="white" opacity="0.75"/>
+        <rect x="4" y="19" width="19" height="5" rx="2.5" fill="white" opacity="0.5"/>
+      </svg>
+      Logbase
+    </a>
+    <div class="nav-links">
+      <button class="nav-link" data-section="logs">Logs</button>
+      <button class="nav-link" data-section="tokens">API Tokens</button>
+      <button class="nav-link" data-section="oauth">OAuth Clients</button>
+    </div>
+    <div class="nav-right">
+      <span id="username-display"></span>
+      <button id="logout-btn" class="btn-logout">Sign out</button>
+    </div>
+  </nav>
+
+  <main class="main">
+
+    <!-- ── Logs Section ───────────────────────────────────────────────── -->
+    <section id="section-logs" class="section hidden">
+
+      <div class="section-header">
+        <h2>Log Viewer</h2>
+        <div style="display:flex;gap:.6rem;align-items:center;">
+          <span id="log-count" class="log-stats"></span>
+          <button id="auto-refresh-btn" class="btn btn-ghost btn-sm">Auto-refresh</button>
+          <button id="clear-filters-btn" class="btn btn-ghost btn-sm">Clear filters</button>
+          <button class="btn btn-ghost btn-sm" onclick="loadLogs()">&#8635; Refresh</button>
+        </div>
+      </div>
+
+      <!-- Search bar -->
+      <div class="log-controls">
+        <div class="search-wrap">
+          <span class="search-icon">&#128269;</span>
+          <input id="search-input" type="search" placeholder="Full-text search across all log fields…" />
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div class="filter-row">
+        <div class="filter-group">
+          <span class="filter-label">App</span>
+          <select id="filter-app"><option value="">All Apps</option></select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Level</span>
+          <select id="filter-level">
+            <option value="">All Levels</option>
+            <option value="error">error</option>
+            <option value="warn">warn</option>
+            <option value="info">info</option>
+            <option value="debug">debug</option>
+            <option value="trace">trace</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">From</span>
+          <input type="date" id="filter-from" />
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">To</span>
+          <input type="date" id="filter-to" />
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Per page</span>
+          <select id="filter-limit">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Table -->
+      <div class="table-wrap" id="logs-table">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-time">Time</th>
+              <th class="col-app">App</th>
+              <th class="col-level">Level</th>
+              <th>Message</th>
+              <th class="col-expand"></th>
+            </tr>
+          </thead>
+          <tbody id="logs-body">
+            <tr><td colspan="5" class="loading-cell">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div id="pagination"></div>
+    </section>
+
+    <!-- ── OAuth Section ─────────────────────────────────────────────── -->
+    <section id="section-oauth" class="section hidden">
+
+      <div class="section-header">
+        <h2>OAuth Clients</h2>
+      </div>
+
+      <p style="color:var(--muted);font-size:.875rem;margin-bottom:1.25rem;line-height:1.6;">
+        OAuth clients use the <strong style="color:var(--text)">Client Credentials</strong> grant (RFC&nbsp;6749).
+        Your app exchanges a <code>client_id</code> + <code>client_secret</code> for a short-lived Bearer token,
+        then uses that token to push logs — no user interaction required. Access tokens expire after <strong style="color:var(--text)">1 hour</strong>.
+      </p>
+
+      <div id="oauth-alert" class="alert hidden"></div>
+
+      <!-- Create form -->
+      <form id="oauth-form" class="token-form">
+        <div class="fgroup">
+          <label for="oauth-client-name">New OAuth client name</label>
+          <input id="oauth-client-name" type="text" placeholder="e.g. billing-service, data-pipeline" required />
+        </div>
+        <button type="submit" class="btn btn-primary">Create OAuth Client</button>
+      </form>
+
+      <!-- Client list -->
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Client ID</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="oauth-client-list">
+            <tr><td colspan="4" class="loading-cell">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <hr class="divider" />
+
+      <!-- OAuth Integration snippet -->
+      <div class="snippet-box">
+        <h3>OAuth Integration Guide</h3>
+        <div class="snippet-select-wrap">
+          <select id="oauth-snippet-client-select">
+            <option value="">— select a client —</option>
+          </select>
+        </div>
+        <div class="snippet-tabs">
+          <button class="oauth-snippet-tab active" data-lang="curl">curl</button>
+          <button class="oauth-snippet-tab" data-lang="node">Node.js</button>
+          <button class="oauth-snippet-tab" data-lang="python">Python</button>
+        </div>
+        <div id="oauth-snippet-curl" class="snippet-pane"><pre></pre></div>
+        <div id="oauth-snippet-node" class="snippet-pane hidden"><pre></pre></div>
+        <div id="oauth-snippet-python" class="snippet-pane hidden"><pre></pre></div>
+      </div>
+    </section>
+
+    <!-- ── Tokens Section ─────────────────────────────────────────────── -->
+    <section id="section-tokens" class="section hidden">
+
+      <div class="section-header">
+        <h2>API Tokens</h2>
+      </div>
+
+      <div id="token-alert" class="alert hidden"></div>
+
+      <!-- Create form -->
+      <form id="token-form" class="token-form">
+        <div class="fgroup">
+          <label for="token-name">New token name</label>
+          <input id="token-name" type="text" placeholder="e.g. my-webapp, backend-service" required />
+        </div>
+        <button type="submit" class="btn btn-primary">Create Token</button>
+      </form>
+
+      <!-- Token list -->
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Token (preview)</th>
+              <th>Created</th>
+              <th>Last Used</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="token-list">
+            <tr><td colspan="5" class="loading-cell">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <hr class="divider" />
+
+      <!-- Integration snippet -->
+      <div class="snippet-box">
+        <h3>Integration Guide</h3>
+        <div class="snippet-select-wrap">
+          <select id="snippet-token-select">
+            <option value="">— select a token —</option>
+          </select>
+        </div>
+        <div class="snippet-tabs">
+          <button class="snippet-tab active" data-lang="curl">curl</button>
+          <button class="snippet-tab" data-lang="node">Node.js</button>
+          <button class="snippet-tab" data-lang="python">Python</button>
+        </div>
+        <div id="snippet-curl" class="snippet-pane"><pre></pre></div>
+        <div id="snippet-node" class="snippet-pane hidden"><pre></pre></div>
+        <div id="snippet-python" class="snippet-pane hidden"><pre></pre></div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- OAuth client credentials modal -->
+  <div id="oauth-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <h3>OAuth client created: <span id="oauth-modal-name"></span></h3>
+      <p>Copy these credentials now — the <strong>client_secret</strong> will not be shown again.</p>
+      <div style="margin-bottom:.75rem;">
+        <div class="expand-label" style="margin-bottom:.3rem;">client_id</div>
+        <div class="token-display" id="oauth-modal-client-id" style="color:#a5b4fc;"></div>
+      </div>
+      <div style="margin-bottom:1rem;">
+        <div class="expand-label" style="margin-bottom:.3rem;">client_secret</div>
+        <div class="token-display" id="oauth-modal-client-secret"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="copyOAuthCredentials()">Copy both</button>
+        <button class="btn btn-primary" onclick="closeOAuthModal()">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Token created modal -->
+  <div id="token-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <h3>Token created: <span id="modal-token-name"></span></h3>
+      <p>Copy this token now — it will not be shown again.</p>
+      <div class="token-display" id="modal-token-value"></div>
+      <div class="modal-actions">
+        <button id="copy-token-btn" class="btn btn-ghost" onclick="copyModalToken()">Copy</button>
+        <button class="btn btn-primary" onclick="closeTokenModal()">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/dashboard.js"></script>
+</body>
+</html>

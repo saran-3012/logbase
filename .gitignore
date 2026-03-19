@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Database (runtime data — not part of source)
+data/
+
+# Environment variables (contains secrets)
+.env
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+*.swp

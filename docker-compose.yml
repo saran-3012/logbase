@@ -1,0 +1,19 @@
+services:
+  logbase:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # Generate a strong secret: openssl rand -hex 32
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET env variable is required}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      LOG_RETENTION_HOURS: ${LOG_RETENTION_HOURS:-24}
+    volumes:
+      # Named volume: persists the SQLite database across container restarts and re-creates
+      - logbase_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  logbase_data:

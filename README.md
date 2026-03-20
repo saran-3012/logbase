@@ -17,6 +17,30 @@ A self-hosted log ingestion and monitoring server with a web UI, full-text searc
 
 ## Getting Started
 
+### Run with Docker (recommended)
+
+```bash
+# 1. Set your secret (required)
+export JWT_SECRET=$(openssl rand -hex 32)
+
+# 2. Build and start — data is persisted in the 'logbase_data' named volume
+docker compose up -d
+
+# View logs
+docker compose logs -f
+```
+
+The SQLite database is stored in a Docker **named volume** (`logbase_data`) so it survives container restarts and re-creates. To back it up:
+
+```bash
+docker run --rm -v logbase_data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/logbase_data.tar.gz -C /data .
+```
+
+---
+
+### Run without Docker
+
 ### Prerequisites
 
 - Node.js **v18+** (v22 recommended)

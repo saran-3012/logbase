@@ -101,4 +101,21 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_rt_client ON oauth_refresh_tokens(client_db_id);
 `);
 
+/* ── Migrations ─────────────────────────────────────────────────────────────────
+ * Each entry runs exactly once, in order, tracked by PRAGMA user_version.
+ * ONLY append to this array — never edit or remove existing entries.
+ * ─────────────────────────────────────────────────────────────────────────────*/
+const migrations = [
+  // v1: baseline schema already created above via CREATE TABLE IF NOT EXISTS
+];
+
+const currentVersion = db.pragma('user_version', { simple: true });
+for (let i = currentVersion; i < migrations.length; i++) {
+  db.transaction(() => {
+    db.exec(migrations[i]);
+    db.pragma(`user_version = ${i + 1}`);
+  })();
+  console.log(`[db] Applied migration ${i + 1}`);
+}
+
 module.exports = db;

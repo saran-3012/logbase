@@ -46,8 +46,9 @@ class LibSQLAdapter extends BaseAdapter {
     const list = (Array.isArray(statements) ? statements : [statements])
       .map(s => s.trim())
       .filter(s => s.length > 0);
-    if (list.length === 0) return;
-    await this.client.batch(list.map(sql => ({ sql })), 'write');
+    for (const sql of list) {
+      await this.client.execute({ sql, args: [] });
+    }
   }
 
   async transaction(fn) {

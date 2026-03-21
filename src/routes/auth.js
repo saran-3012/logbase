@@ -5,8 +5,7 @@ const jwt         = require('jsonwebtoken');
 const crypto      = require('crypto');
 const db          = require('../db/database');
 const sessionAuth = require('../middleware/sessionAuth');
-const usersQ      = require('../db/queries/users');
-const apiTokensQ  = require('../db/queries/apiTokens');
+const { SelectQuery, InsertQuery, DeleteQuery, eq, aliasExpr, col, rawExpr } = require('../db/query');
 
 const router = express.Router();
 
@@ -33,7 +32,10 @@ router.post('/register', wrap(async (req, res) => {
   const passwordHash = bcrypt.hashSync(password, 12);
 
   try {
-    const result = await db.run(usersQ.insert, [username.trim(), email.trim().toLowerCase(), passwordHash]);
+    const result = await db.query(
+      new InsertQuery('users')
+        .values({ username: username.trim(), email: email.trim().toLowerCase(), password_hash: passwordHash })
+    );
     res.status(201).json({ message: 'Account created successfully', userId: result.lastInsertRowid });
   } catch (err) {
     if (err.message && err.message.includes('UNIQUE')) {
@@ -51,7 +53,11 @@ router.post('/login', wrap(async (req, res) => {
     return res.status(400).json({ error: 'username and password are required' });
   }
 
-  const user = await db.get(usersQ.findByUsername, [String(username).trim()]);
+  const user = await db.query(
+    new SelectQuery('users')
+      .where(eq('username', String(username).trim()))
+      .single()
+  );
 
   // Use constant-time compare even on missing user to prevent user enumeration
   const hash  = user ? user.password_hash : '$2a$12$invalidhashfortimingnormalization';
@@ -81,7 +87,10 @@ router.post('/tokens', sessionAuth, wrap(async (req, res) => {
   const token = crypto.randomBytes(32).toString('hex');
 
   try {
-    const result = await db.run(apiTokensQ.insert, [req.user.userId, name.trim(), token]);
+    const result = await db.query(
+      new InsertQuery('api_tokens')
+        .values({ user_id: req.user.userId, name: name.trim(), token })
+    );
     res.status(201).json({ id: result.lastInsertRowid, name: name.trim(), token });
   } catch (err) {
     if (err.message && err.message.includes('UNIQUE')) {
@@ -93,7 +102,15 @@ router.post('/tokens', sessionAuth, wrap(async (req, res) => {
 
 /* ── GET /auth/tokens ─────────────────────────────────────────────────────── */
 router.get('/tokens', sessionAuth, wrap(async (req, res) => {
-  const tokens = await db.all(apiTokensQ.listByUser, [req.user.userId]);
+  const tokens = await db.query(
+    new SelectQuery('api_tokens')
+      .columns([
+        col('id'), col('name'), col('created_at'), col('last_used_at'),
+        aliasExpr(rawExpr("substr(token, 1, 8) || '...'"), 'token_preview'),
+      ])
+      .where(eq('user_id', req.user.userId))
+      .orderBy('created_at', 'DESC')
+  );
   res.json(tokens);
 }));
 
@@ -104,7 +121,11 @@ router.delete('/tokens/:id', sessionAuth, wrap(async (req, res) => {
     return res.status(400).json({ error: 'Invalid token id' });
   }
 
-  const result = await db.run(apiTokensQ.deleteByUser, [id, req.user.userId]);
+  const result = await db.query(
+    new DeleteQuery('api_tokens')
+      .where(eq('id', id))
+      .where(eq('user_id', req.user.userId))
+  );
 
   if (result.changes === 0) {
     return res.status(404).json({ error: 'Token not found' });

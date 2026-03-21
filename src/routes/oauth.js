@@ -1,10 +1,12 @@
 'use strict';
-const express     = require('express');
-const bcrypt      = require('bcryptjs');
-const crypto      = require('crypto');
-const jwt         = require('jsonwebtoken');
-const db          = require('../db/database');
-const sessionAuth = require('../middleware/sessionAuth');
+const express        = require('express');
+const bcrypt         = require('bcryptjs');
+const crypto         = require('crypto');
+const jwt            = require('jsonwebtoken');
+const db             = require('../db/database');
+const sessionAuth    = require('../middleware/sessionAuth');
+const oauthClientsQ  = require('../db/queries/oauthClients');
+const oauthTokensQ   = require('../db/queries/oauthTokens');
 
 const router = express.Router();
 
@@ -38,10 +40,7 @@ async function issueTokenPair(client, ctx = db) {
   const refreshTokenHash = sha256(refreshToken);
   const expiresAt        = Math.floor(Date.now() / 1000) + REFRESH_TOKEN_TTL;
 
-  await ctx.run(
-    'INSERT INTO oauth_refresh_tokens (client_db_id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)',
-    [client.id, client.user_id, refreshTokenHash, expiresAt]
-  );
+  await ctx.run(oauthTokensQ.insert, [client.id, client.user_id, refreshTokenHash, expiresAt]);
 
   return { accessToken, refreshToken, expiresAt };
 }
@@ -89,10 +88,7 @@ router.post('/token', wrap(async (req, res) => {
       });
     }
 
-    const client = await db.get(
-      'SELECT * FROM oauth_clients WHERE client_id = ?',
-      [String(clientId)]
-    );
+    const client = await db.get(oauthClientsQ.findByClientId, [String(clientId)]);
 
     const hash  = client ? client.client_secret_hash : '$2a$12$invalidhashfortimingnormalization';
     const match = bcrypt.compareSync(String(clientSecret), hash);
@@ -128,10 +124,7 @@ router.post('/token', wrap(async (req, res) => {
     const tokenHash = sha256(String(incomingToken));
     const now       = Math.floor(Date.now() / 1000);
 
-    const row = await db.get(
-      'SELECT * FROM oauth_refresh_tokens WHERE token_hash = ?',
-      [tokenHash]
-    );
+    const row = await db.get(oauthTokensQ.findByHash, [tokenHash]);
 
     if (!row) {
       return res.status(401).json({
@@ -143,10 +136,7 @@ router.post('/token', wrap(async (req, res) => {
     // Detect replay of an already-rotated token — possible theft
     if (row.revoked) {
       // Revoke all active refresh tokens for this client as a precaution
-      await db.run(
-        'UPDATE oauth_refresh_tokens SET revoked = 1 WHERE client_db_id = ?',
-        [row.client_db_id]
-      );
+      await db.run(oauthTokensQ.revokeByClientId, [row.client_db_id]);
       console.warn(`[oauth] Stolen refresh token reuse detected for client_db_id=${row.client_db_id}. All tokens revoked.`);
       return res.status(401).json({
         error:             'invalid_grant',
@@ -155,17 +145,14 @@ router.post('/token', wrap(async (req, res) => {
     }
 
     if (row.expires_at < now) {
-      await db.run('UPDATE oauth_refresh_tokens SET revoked = 1 WHERE id = ?', [row.id]);
+      await db.run(oauthTokensQ.revokeById, [row.id]);
       return res.status(401).json({
         error:             'invalid_grant',
         error_description: 'Refresh token has expired. Please re-authenticate with client_credentials.'
       });
     }
 
-    const client = await db.get(
-      'SELECT * FROM oauth_clients WHERE id = ?',
-      [row.client_db_id]
-    );
+    const client = await db.get(oauthClientsQ.findById, [row.client_db_id]);
     if (!client) {
       return res.status(401).json({
         error:             'invalid_client',
@@ -175,10 +162,7 @@ router.post('/token', wrap(async (req, res) => {
 
     // Rotate: revoke the current refresh token and issue a new pair atomically
     const { accessToken, refreshToken } = await db.transaction(async (ctx) => {
-      await ctx.run(
-        'UPDATE oauth_refresh_tokens SET revoked = 1, reuse_count = reuse_count + 1 WHERE id = ?',
-        [row.id]
-      );
+      await ctx.run(oauthTokensQ.revokeWithReuse, [row.id]);
       return issueTokenPair(client, ctx);
     });
 
@@ -205,10 +189,7 @@ router.post('/revoke', wrap(async (req, res) => {
   }
 
   const tokenHash = sha256(String(token));
-  await db.run(
-    'UPDATE oauth_refresh_tokens SET revoked = 1 WHERE token_hash = ?',
-    [tokenHash]
-  );
+  await db.run(oauthTokensQ.revokeByHash, [tokenHash]);
 
   // Per RFC 7009 §2.2 — always return 200 regardless of whether the token existed
   res.json({ ok: true });
@@ -226,10 +207,7 @@ router.post('/clients', sessionAuth, wrap(async (req, res) => {
   const secretHash   = bcrypt.hashSync(clientSecret, 12);
 
   try {
-    const result = await db.run(
-      'INSERT INTO oauth_clients (user_id, name, client_id, client_secret_hash) VALUES (?, ?, ?, ?)',
-      [req.user.userId, name.trim(), clientId, secretHash]
-    );
+    const result = await db.run(oauthClientsQ.insert, [req.user.userId, name.trim(), clientId, secretHash]);
     // client_secret is returned ONLY at creation time — it is never stored in plain text
     res.status(201).json({
       id:            result.lastInsertRowid,
@@ -247,13 +225,7 @@ router.post('/clients', sessionAuth, wrap(async (req, res) => {
 
 /* ── GET /oauth/clients ─────────────────────────────────────────────────────── */
 router.get('/clients', sessionAuth, wrap(async (req, res) => {
-  const clients = await db.all(
-    `SELECT id, name, client_id, created_at
-     FROM oauth_clients
-     WHERE user_id = ?
-     ORDER BY created_at DESC`,
-    [req.user.userId]
-  );
+  const clients = await db.all(oauthClientsQ.listByUser, [req.user.userId]);
   res.json(clients);
 }));
 
@@ -264,10 +236,7 @@ router.delete('/clients/:id', sessionAuth, wrap(async (req, res) => {
     return res.status(400).json({ error: 'Invalid client id' });
   }
 
-  const result = await db.run(
-    'DELETE FROM oauth_clients WHERE id = ? AND user_id = ?',
-    [id, req.user.userId]
-  );
+  const result = await db.run(oauthClientsQ.deleteByUser, [id, req.user.userId]);
 
   if (result.changes === 0) {
     return res.status(404).json({ error: 'OAuth client not found' });

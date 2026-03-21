@@ -5,6 +5,8 @@ const jwt         = require('jsonwebtoken');
 const crypto      = require('crypto');
 const db          = require('../db/database');
 const sessionAuth = require('../middleware/sessionAuth');
+const usersQ      = require('../db/queries/users');
+const apiTokensQ  = require('../db/queries/apiTokens');
 
 const router = express.Router();
 
@@ -31,10 +33,7 @@ router.post('/register', wrap(async (req, res) => {
   const passwordHash = bcrypt.hashSync(password, 12);
 
   try {
-    const result = await db.run(
-      'INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)',
-      [username.trim(), email.trim().toLowerCase(), passwordHash]
-    );
+    const result = await db.run(usersQ.insert, [username.trim(), email.trim().toLowerCase(), passwordHash]);
     res.status(201).json({ message: 'Account created successfully', userId: result.lastInsertRowid });
   } catch (err) {
     if (err.message && err.message.includes('UNIQUE')) {
@@ -52,10 +51,7 @@ router.post('/login', wrap(async (req, res) => {
     return res.status(400).json({ error: 'username and password are required' });
   }
 
-  const user = await db.get(
-    'SELECT * FROM users WHERE username = ?',
-    [String(username).trim()]
-  );
+  const user = await db.get(usersQ.findByUsername, [String(username).trim()]);
 
   // Use constant-time compare even on missing user to prevent user enumeration
   const hash  = user ? user.password_hash : '$2a$12$invalidhashfortimingnormalization';
@@ -85,10 +81,7 @@ router.post('/tokens', sessionAuth, wrap(async (req, res) => {
   const token = crypto.randomBytes(32).toString('hex');
 
   try {
-    const result = await db.run(
-      'INSERT INTO api_tokens (user_id, name, token) VALUES (?, ?, ?)',
-      [req.user.userId, name.trim(), token]
-    );
+    const result = await db.run(apiTokensQ.insert, [req.user.userId, name.trim(), token]);
     res.status(201).json({ id: result.lastInsertRowid, name: name.trim(), token });
   } catch (err) {
     if (err.message && err.message.includes('UNIQUE')) {
@@ -100,14 +93,7 @@ router.post('/tokens', sessionAuth, wrap(async (req, res) => {
 
 /* ── GET /auth/tokens ─────────────────────────────────────────────────────── */
 router.get('/tokens', sessionAuth, wrap(async (req, res) => {
-  const tokens = await db.all(
-    `SELECT id, name, created_at, last_used_at,
-            substr(token, 1, 8) || '...' AS token_preview
-     FROM api_tokens
-     WHERE user_id = ?
-     ORDER BY created_at DESC`,
-    [req.user.userId]
-  );
+  const tokens = await db.all(apiTokensQ.listByUser, [req.user.userId]);
   res.json(tokens);
 }));
 
@@ -118,10 +104,7 @@ router.delete('/tokens/:id', sessionAuth, wrap(async (req, res) => {
     return res.status(400).json({ error: 'Invalid token id' });
   }
 
-  const result = await db.run(
-    'DELETE FROM api_tokens WHERE id = ? AND user_id = ?',
-    [id, req.user.userId]
-  );
+  const result = await db.run(apiTokensQ.deleteByUser, [id, req.user.userId]);
 
   if (result.changes === 0) {
     return res.status(404).json({ error: 'Token not found' });

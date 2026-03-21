@@ -1,5 +1,6 @@
 'use strict';
-const db = require('../db/database');
+const db         = require('../db/database');
+const apiTokensQ = require('../db/queries/apiTokens');
 
 module.exports = async function apiTokenAuth(req, res, next) {
   try {
@@ -8,19 +9,13 @@ module.exports = async function apiTokenAuth(req, res, next) {
       return res.status(401).json({ error: 'Missing X-API-Token header' });
     }
 
-    const row = await db.get(
-      'SELECT id AS token_id, user_id FROM api_tokens WHERE token = ?',
-      [String(token)]
-    );
+    const row = await db.get(apiTokensQ.findByToken, [String(token)]);
 
     if (!row) {
       return res.status(401).json({ error: 'Invalid API token' });
     }
 
-    await db.run(
-      'UPDATE api_tokens SET last_used_at = unixepoch() WHERE id = ?',
-      [row.token_id]
-    );
+    await db.run(apiTokensQ.touchLastUsed, [row.token_id]);
 
     req.tokenId = row.token_id;
     req.userId  = row.user_id;

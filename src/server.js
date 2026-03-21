@@ -4,7 +4,7 @@ require('dotenv').config();
 const express = require('express');
 const path    = require('path');
 const db      = require('./db/database');
-const logsQ   = require('./db/queries/logs');
+const { DeleteQuery, lt } = require('./db/query');
 
 const authRoutes  = require('./routes/auth');
 const logsRoutes  = require('./routes/logs');
@@ -36,7 +36,7 @@ const RETENTION_SECS = (parseInt(process.env.LOG_RETENTION_HOURS, 10) || 24) * 3
 
 async function purgeOldLogs() {
   const cutoff = Math.floor(Date.now() / 1000) - RETENTION_SECS;
-  const result = await db.run(logsQ.purge, [cutoff]);
+  const result = await db.query(new DeleteQuery('logs').where(lt('timestamp', cutoff)));
   if (result.changes > 0) {
     const hours = Math.round(RETENTION_SECS / 3600);
     console.log(`[retention] Purged ${result.changes} log(s) older than ${hours}h`);

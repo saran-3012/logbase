@@ -4,7 +4,7 @@ const LibSQLAdapter  = require('./adapters/libsql');
 const tables         = require('./schema/tables.json');
 const indexes        = require('./schema/indexes.json');
 const migrations     = require('./schema/migrations.json');
-const schemaVersionQ = require('./queries/schemaVersion');
+const { SelectQuery, InsertQuery, UpdateQuery } = require('./query');
 
 // ── Adapter factory ────────────────────────────────────────────────────────────
 // To add a new adapter: create src/db/adapters/<name>.js, set DB_ADAPTER=<name>.
@@ -29,9 +29,11 @@ async function init() {
   await db.exec(ddl);
 
   // Seed version row on first run
-  const versionRow = await db.get(schemaVersionQ.select);
+  const versionRow = await db.query(
+    new SelectQuery('_schema_version').columns(['version']).single()
+  );
   if (!versionRow) {
-    await db.run(schemaVersionQ.insert);
+    await db.query(new InsertQuery('_schema_version').values({ version: 0 }));
   }
   const currentVersion = versionRow ? Number(versionRow.version) : 0;
 
@@ -44,12 +46,12 @@ async function init() {
         for (const sql of stmts) {
           await ctx.run(sql);
         }
-        await ctx.run(schemaVersionQ.update, [i + 1]);
+        await ctx.query(new UpdateQuery('_schema_version').set({ version: i + 1 }));
       });
       console.log(`[db] Applied migration v${i + 1}: ${migration.description || migration.type}`);
     } else {
       // Baseline marker — just bump the version
-      await db.run(schemaVersionQ.update, [i + 1]);
+      await db.query(new UpdateQuery('_schema_version').set({ version: i + 1 }));
     }
   }
 

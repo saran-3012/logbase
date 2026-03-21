@@ -1,0 +1,6 @@
+[
+  {
+    "version": 1,
+    "description": "Baseline schema — tables, indexes, and FTS defined in tables.json / indexes.json"
+  }
+]

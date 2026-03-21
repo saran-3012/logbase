@@ -1,0 +1,78 @@
+[
+  {
+    "name": "users",
+    "columns": [
+      { "name": "id",            "type": "integer", "primaryKey": true },
+      { "name": "username",      "type": "text",    "notNull": true, "unique": true },
+      { "name": "email",         "type": "text",    "notNull": true, "unique": true },
+      { "name": "password_hash", "type": "text",    "notNull": true },
+      { "name": "created_at",    "type": "integer", "notNull": true, "default": "now" }
+    ]
+  },
+  {
+    "name": "api_tokens",
+    "columns": [
+      { "name": "id",           "type": "integer", "primaryKey": true },
+      { "name": "user_id",      "type": "integer", "notNull": true, "references": { "table": "users", "column": "id", "onDelete": "CASCADE" } },
+      { "name": "name",         "type": "text",    "notNull": true },
+      { "name": "token",        "type": "text",    "notNull": true, "unique": true },
+      { "name": "created_at",   "type": "integer", "notNull": true, "default": "now" },
+      { "name": "last_used_at", "type": "integer" }
+    ],
+    "uniqueConstraints": [
+      ["user_id", "name"]
+    ]
+  },
+  {
+    "name": "logs",
+    "fullTextSearch": {
+      "columns": ["app_name", "level", "message", "metadata"]
+    },
+    "columns": [
+      { "name": "id",        "type": "integer", "primaryKey": true },
+      { "name": "user_id",   "type": "integer", "notNull": true, "references": { "table": "users",      "column": "id", "onDelete": "CASCADE"  } },
+      { "name": "token_id",  "type": "integer",                  "references": { "table": "api_tokens", "column": "id", "onDelete": "SET NULL" } },
+      { "name": "app_name",  "type": "text",    "notNull": true, "default": "unknown" },
+      { "name": "level",     "type": "text",    "notNull": true, "default": "info" },
+      { "name": "message",   "type": "text",    "notNull": true, "default": "" },
+      { "name": "metadata",  "type": "text",    "notNull": true, "default": "{}" },
+      { "name": "raw",       "type": "text",    "notNull": true, "default": "{}" },
+      { "name": "timestamp", "type": "integer", "notNull": true, "default": "now" }
+    ]
+  },
+  {
+    "name": "oauth_clients",
+    "columns": [
+      { "name": "id",                 "type": "integer", "primaryKey": true },
+      { "name": "user_id",            "type": "integer", "notNull": true, "references": { "table": "users", "column": "id", "onDelete": "CASCADE" } },
+      { "name": "name",               "type": "text",    "notNull": true },
+      { "name": "client_id",          "type": "text",    "notNull": true, "unique": true },
+      { "name": "client_secret_hash", "type": "text",    "notNull": true },
+      { "name": "created_at",         "type": "integer", "notNull": true, "default": "now" }
+    ],
+    "uniqueConstraints": [
+      ["user_id", "name"]
+    ]
+  },
+  {
+    "name": "oauth_refresh_tokens",
+    "comment": "token_hash stores SHA-256 of the actual token — never the plain text. reuse_count detects stolen token families.",
+    "columns": [
+      { "name": "id",           "type": "integer", "primaryKey": true },
+      { "name": "client_db_id", "type": "integer", "notNull": true, "references": { "table": "oauth_clients", "column": "id", "onDelete": "CASCADE" } },
+      { "name": "user_id",      "type": "integer", "notNull": true, "references": { "table": "users",         "column": "id", "onDelete": "CASCADE" } },
+      { "name": "token_hash",   "type": "text",    "notNull": true, "unique": true },
+      { "name": "issued_at",    "type": "integer", "notNull": true, "default": "now" },
+      { "name": "expires_at",   "type": "integer", "notNull": true },
+      { "name": "revoked",      "type": "integer", "notNull": true, "default": 0 },
+      { "name": "reuse_count",  "type": "integer", "notNull": true, "default": 0 }
+    ]
+  },
+  {
+    "name": "_schema_version",
+    "comment": "Internal migration version tracking — do not modify manually.",
+    "columns": [
+      { "name": "version", "type": "integer", "notNull": true, "default": 0 }
+    ]
+  }
+]

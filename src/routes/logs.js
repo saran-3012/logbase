@@ -3,6 +3,7 @@ const express         = require('express');
 const db              = require('../db/database');
 const logIngestAuth   = require('../middleware/logIngestAuth');
 const sessionAuth     = require('../middleware/sessionAuth');
+const logsQ           = require('../db/queries/logs');
 
 const router = express.Router();
 
@@ -75,10 +76,7 @@ router.post('/', logIngestAuth, wrap(async (req, res) => {
   await db.transaction(async (ctx) => {
     for (const entry of entries) {
       const { appName, level, message, metadata, raw } = normaliseEntry(entry);
-      await ctx.run(
-        'INSERT INTO logs (user_id, token_id, app_name, level, message, metadata, raw) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [req.userId, req.tokenId, appName, level, message, metadata, raw]
-      );
+      await ctx.run(logsQ.insert, [req.userId, req.tokenId, appName, level, message, metadata, raw]);
     }
   });
 
@@ -114,20 +112,8 @@ router.get('/', sessionAuth, wrap(async (req, res) => {
     const baseParams  = [ftsQuery, req.user.userId, ...extraParams];
     const queryParams = [...baseParams, limit, offset];
 
-    const selectSql = `
-      SELECT l.id, l.app_name, l.level, l.message, l.metadata, l.raw, l.timestamp
-      FROM logs_fts
-      JOIN logs l ON logs_fts.rowid = l.id
-      WHERE logs_fts MATCH ? AND l.user_id = ? ${filterStr}
-      ORDER BY l.timestamp DESC
-      LIMIT ? OFFSET ?
-    `;
-    const countSql = `
-      SELECT COUNT(*) AS count
-      FROM logs_fts
-      JOIN logs l ON logs_fts.rowid = l.id
-      WHERE logs_fts MATCH ? AND l.user_id = ? ${filterStr}
-    `;
+    const selectSql = logsQ.ftsSelect(filterStr);
+    const countSql  = logsQ.ftsCount(filterStr);
 
     try {
       rows  = await db.all(selectSql, queryParams);
@@ -152,17 +138,9 @@ router.get('/', sessionAuth, wrap(async (req, res) => {
 
     const whereClause = where.join(' AND ');
 
-    rows = await db.all(
-      `SELECT id, app_name, level, message, metadata, raw, timestamp
-       FROM logs WHERE ${whereClause}
-       ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
-      [...params, limit, offset]
-    );
+    rows = await db.all(logsQ.filteredSelect(whereClause), [...params, limit, offset]);
 
-    const countRow = await db.get(
-      `SELECT COUNT(*) AS count FROM logs WHERE ${whereClause}`,
-      params
-    );
+    const countRow = await db.get(logsQ.filteredCount(whereClause), params);
     total = countRow ? Number(countRow.count) : 0;
   }
 
@@ -183,10 +161,7 @@ router.get('/', sessionAuth, wrap(async (req, res) => {
 
 /* ── GET /logs/apps ─────────────────────────────────────────────────────────── */
 router.get('/apps', sessionAuth, wrap(async (req, res) => {
-  const apps = await db.all(
-    'SELECT DISTINCT app_name FROM logs WHERE user_id = ? ORDER BY app_name',
-    [req.user.userId]
-  );
+  const apps = await db.all(logsQ.appNames, [req.user.userId]);
   res.json(apps.map(r => r.app_name));
 }));
 

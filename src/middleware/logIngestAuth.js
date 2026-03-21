@@ -1,8 +1,7 @@
 'use strict';
-const jwt           = require('jsonwebtoken');
-const db            = require('../db/database');
-const apiTokensQ    = require('../db/queries/apiTokens');
-const oauthClientsQ = require('../db/queries/oauthClients');
+const jwt = require('jsonwebtoken');
+const db  = require('../db/database');
+const { SelectQuery, UpdateQuery, eq, aliasExpr, col, rawExpr } = require('../db/query');
 
 /**
  * Combined log-ingest authentication middleware.
@@ -21,13 +20,22 @@ module.exports = async function logIngestAuth(req, res, next) {
 
     /* ── API Token ─────────────────────────────────────────────────────────── */
     if (apiToken) {
-      const row = await db.get(apiTokensQ.findByToken, [String(apiToken)]);
+      const row = await db.query(
+        new SelectQuery('api_tokens')
+          .columns([aliasExpr(col('id'), 'token_id'), col('user_id')])
+          .where(eq('token', String(apiToken)))
+          .single()
+      );
 
       if (!row) {
         return res.status(401).json({ error: 'Invalid API token' });
       }
 
-      await db.run(apiTokensQ.touchLastUsed, [row.token_id]);
+      await db.query(
+        new UpdateQuery('api_tokens')
+          .set({ last_used_at: rawExpr('unixepoch()') })
+          .where(eq('id', row.token_id))
+      );
 
       req.tokenId    = row.token_id;
       req.userId     = row.user_id;
@@ -52,7 +60,13 @@ module.exports = async function logIngestAuth(req, res, next) {
       }
 
       // Verify the OAuth client has not been revoked since the token was issued
-      const client = await db.get(oauthClientsQ.findForTokenValidation, [payload.clientId, payload.sub]);
+      const client = await db.query(
+        new SelectQuery('oauth_clients')
+          .columns(['id'])
+          .where(eq('client_id', payload.clientId))
+          .where(eq('user_id', payload.sub))
+          .single()
+      );
 
       if (!client) {
         return res.status(401).json({ error: 'OAuth client has been revoked' });

@@ -1,9 +1,7 @@
-# ── Stage 1: build dependencies ───────────────────────────────────────────────
+# ── Stage 1: install dependencies ─────────────────────────────────────────────
 FROM node:22-alpine AS deps
 
-# better-sqlite3 is a native module and needs build tools
-RUN apk add --no-cache python3 make g++
-
+# @libsql/client is pure JS — no native compilation needed
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -18,7 +16,7 @@ WORKDIR /app
 # Create a non-root user for security
 RUN addgroup -S logbase && adduser -S logbase -G logbase
 
-# Copy compiled native modules and production deps from build stage
+# Copy production deps from build stage
 COPY --from=deps /app/node_modules ./node_modules
 
 # Copy application source
@@ -26,13 +24,9 @@ COPY src/       ./src/
 COPY public/    ./public/
 COPY package.json ./
 
-# Create the data directory (SQLite DB lives here) and set ownership
-RUN mkdir -p /app/data && chown -R logbase:logbase /app
+RUN chown -R logbase:logbase /app
 
 USER logbase
-
-# Mount this volume to persist the SQLite database across container restarts
-VOLUME ["/app/data"]
 
 EXPOSE 3000
 

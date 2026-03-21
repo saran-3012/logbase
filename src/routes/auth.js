@@ -1,15 +1,18 @@
 'use strict';
-const express   = require('express');
-const bcrypt    = require('bcryptjs');
-const jwt       = require('jsonwebtoken');
-const crypto    = require('crypto');
-const db        = require('../db/database');
+const express     = require('express');
+const bcrypt      = require('bcryptjs');
+const jwt         = require('jsonwebtoken');
+const crypto      = require('crypto');
+const db          = require('../db/database');
 const sessionAuth = require('../middleware/sessionAuth');
 
 const router = express.Router();
 
+// Wrap async route handlers so unhandled rejections reach Express error handler
+const wrap = fn => (req, res, next) => fn(req, res, next).catch(next);
+
 /* ── POST /auth/register ──────────────────────────────────────────────────── */
-router.post('/register', (req, res) => {
+router.post('/register', wrap(async (req, res) => {
   const { username, email, password } = req.body || {};
 
   if (!username || !email || !password) {
@@ -28,31 +31,34 @@ router.post('/register', (req, res) => {
   const passwordHash = bcrypt.hashSync(password, 12);
 
   try {
-    const result = db.prepare(
-      'INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)'
-    ).run(username.trim(), email.trim().toLowerCase(), passwordHash);
-
+    const result = await db.run(
+      'INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)',
+      [username.trim(), email.trim().toLowerCase(), passwordHash]
+    );
     res.status(201).json({ message: 'Account created successfully', userId: result.lastInsertRowid });
   } catch (err) {
-    if (err.message.includes('UNIQUE')) {
+    if (err.message && err.message.includes('UNIQUE')) {
       return res.status(409).json({ error: 'Username or email already exists' });
     }
     throw err;
   }
-});
+}));
 
 /* ── POST /auth/login ─────────────────────────────────────────────────────── */
-router.post('/login', (req, res) => {
+router.post('/login', wrap(async (req, res) => {
   const { username, password } = req.body || {};
 
   if (!username || !password) {
     return res.status(400).json({ error: 'username and password are required' });
   }
 
-  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(String(username).trim());
+  const user = await db.get(
+    'SELECT * FROM users WHERE username = ?',
+    [String(username).trim()]
+  );
 
   // Use constant-time compare even on missing user to prevent user enumeration
-  const hash = user ? user.password_hash : '$2a$12$invalidhashfortimingnormalization';
+  const hash  = user ? user.password_hash : '$2a$12$invalidhashfortimingnormalization';
   const match = bcrypt.compareSync(String(password), hash);
 
   if (!user || !match) {
@@ -66,10 +72,10 @@ router.post('/login', (req, res) => {
   );
 
   res.json({ token, username: user.username });
-});
+}));
 
 /* ── POST /auth/tokens ────────────────────────────────────────────────────── */
-router.post('/tokens', sessionAuth, (req, res) => {
+router.post('/tokens', sessionAuth, wrap(async (req, res) => {
   const { name } = req.body || {};
   if (!name || typeof name !== 'string' || !name.trim()) {
     return res.status(400).json({ error: 'Token name is required' });
@@ -79,47 +85,49 @@ router.post('/tokens', sessionAuth, (req, res) => {
   const token = crypto.randomBytes(32).toString('hex');
 
   try {
-    const result = db.prepare(
-      'INSERT INTO api_tokens (user_id, name, token) VALUES (?, ?, ?)'
-    ).run(req.user.userId, name.trim(), token);
-
+    const result = await db.run(
+      'INSERT INTO api_tokens (user_id, name, token) VALUES (?, ?, ?)',
+      [req.user.userId, name.trim(), token]
+    );
     res.status(201).json({ id: result.lastInsertRowid, name: name.trim(), token });
   } catch (err) {
-    if (err.message.includes('UNIQUE')) {
+    if (err.message && err.message.includes('UNIQUE')) {
       return res.status(409).json({ error: 'A token with that name already exists' });
     }
     throw err;
   }
-});
+}));
 
 /* ── GET /auth/tokens ─────────────────────────────────────────────────────── */
-router.get('/tokens', sessionAuth, (req, res) => {
-  const tokens = db.prepare(`
-    SELECT id, name, created_at, last_used_at,
-           substr(token, 1, 8) || '...' AS token_preview
-    FROM api_tokens
-    WHERE user_id = ?
-    ORDER BY created_at DESC
-  `).all(req.user.userId);
-
+router.get('/tokens', sessionAuth, wrap(async (req, res) => {
+  const tokens = await db.all(
+    `SELECT id, name, created_at, last_used_at,
+            substr(token, 1, 8) || '...' AS token_preview
+     FROM api_tokens
+     WHERE user_id = ?
+     ORDER BY created_at DESC`,
+    [req.user.userId]
+  );
   res.json(tokens);
-});
+}));
 
 /* ── DELETE /auth/tokens/:id ──────────────────────────────────────────────── */
-router.delete('/tokens/:id', sessionAuth, (req, res) => {
+router.delete('/tokens/:id', sessionAuth, wrap(async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id)) {
     return res.status(400).json({ error: 'Invalid token id' });
   }
 
-  const result = db.prepare(
-    'DELETE FROM api_tokens WHERE id = ? AND user_id = ?'
-  ).run(id, req.user.userId);
+  const result = await db.run(
+    'DELETE FROM api_tokens WHERE id = ? AND user_id = ?',
+    [id, req.user.userId]
+  );
 
   if (result.changes === 0) {
     return res.status(404).json({ error: 'Token not found' });
   }
   res.json({ message: 'Token revoked' });
-});
+}));
 
 module.exports = router;
+

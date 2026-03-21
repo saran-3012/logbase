@@ -10,10 +10,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET env variable is required}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
       LOG_RETENTION_HOURS: ${LOG_RETENTION_HOURS:-24}
-    volumes:
-      # Named volume: persists the SQLite database across container restarts and re-creates
-      - logbase_data:/app/data
+      # Turso: libsql://<db-name>-<org>.turso.io
+      # Local SQLite fallback: file:./data/logs.db
+      TURSO_DATABASE_URL: ${TURSO_DATABASE_URL:?TURSO_DATABASE_URL env variable is required}
+      TURSO_AUTH_TOKEN: ${TURSO_AUTH_TOKEN:-}
     restart: unless-stopped
-
-volumes:
-  logbase_data:

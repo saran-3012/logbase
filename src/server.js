@@ -33,20 +33,29 @@ app.use((err, req, res, _next) => {
 /* ── Log retention job ──────────────────────────────────────────────────────── */
 const RETENTION_SECS = (parseInt(process.env.LOG_RETENTION_HOURS, 10) || 24) * 3600;
 
-function purgeOldLogs() {
+async function purgeOldLogs() {
   const cutoff = Math.floor(Date.now() / 1000) - RETENTION_SECS;
-  const result = db.prepare('DELETE FROM logs WHERE timestamp < ?').run(cutoff);
+  const result = await db.run('DELETE FROM logs WHERE timestamp < ?', [cutoff]);
   if (result.changes > 0) {
     const hours = Math.round(RETENTION_SECS / 3600);
     console.log(`[retention] Purged ${result.changes} log(s) older than ${hours}h`);
   }
 }
 
-purgeOldLogs();                           // run once on startup
-setInterval(purgeOldLogs, 60 * 60 * 1000); // then every hour
-
 /* ── Start ──────────────────────────────────────────────────────────────────── */
-app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-  console.log(`Log retention: ${Math.round(RETENTION_SECS / 3600)}h`);
+async function start() {
+  await db.init();
+
+  purgeOldLogs();                              // run once on startup
+  setInterval(purgeOldLogs, 60 * 60 * 1000);  // then every hour
+
+  app.listen(PORT, () => {
+    console.log(`Server running at http://localhost:${PORT}`);
+    console.log(`Log retention: ${Math.round(RETENTION_SECS / 3600)}h`);
+  });
+}
+
+start().catch(err => {
+  console.error('[fatal] Failed to start server:', err.message);
+  process.exit(1);
 });

@@ -1,7 +1,7 @@
 'use strict';
 const jwt    = require('jsonwebtoken');
 const db     = require('../db/database');
-const usersQ = require('../db/queries/users');
+const { SelectQuery, eq } = require('../db/query');
 
 module.exports = async function sessionAuth(req, res, next) {
   try {
@@ -24,7 +24,12 @@ module.exports = async function sessionAuth(req, res, next) {
     }
 
     // Confirm the user still exists (guards against stale tokens after a DB reset)
-    const user = await db.get(usersQ.findById, [payload.userId]);
+    const user = await db.query(
+      new SelectQuery('users')
+        .columns(['id'])
+        .where(eq('id', payload.userId))
+        .single()
+    );
     if (!user) {
       return res.status(401).json({ error: 'Invalid or expired session token' });
     }

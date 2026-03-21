@@ -3,7 +3,10 @@ const express         = require('express');
 const db              = require('../db/database');
 const logIngestAuth   = require('../middleware/logIngestAuth');
 const sessionAuth     = require('../middleware/sessionAuth');
-const logsQ           = require('../db/queries/logs');
+const {
+  SelectQuery, InsertQuery,
+  eq, lt, lte, gte, and, rawCond, aliasExpr, col, count,
+} = require('../db/query');
 
 const router = express.Router();
 
@@ -76,7 +79,10 @@ router.post('/', logIngestAuth, wrap(async (req, res) => {
   await db.transaction(async (ctx) => {
     for (const entry of entries) {
       const { appName, level, message, metadata, raw } = normaliseEntry(entry);
-      await ctx.run(logsQ.insert, [req.userId, req.tokenId, appName, level, message, metadata, raw]);
+      await ctx.query(
+        new InsertQuery('logs')
+          .values({ user_id: req.userId, token_id: req.tokenId, app_name: appName, level, message, metadata, raw })
+      );
     }
   });
 
@@ -97,27 +103,39 @@ router.get('/', sessionAuth, wrap(async (req, res) => {
 
   if (ftsQuery) {
     // ── Full-text search via FTS5 ──────────────────────────────────────────
-    const extraFilters = [];
-    const extraParams  = [];
-
-    if (app)  { extraFilters.push('AND l.app_name = ?'); extraParams.push(app); }
-    if (level){ extraFilters.push('AND l.level = ?');    extraParams.push(level.toLowerCase()); }
+    // FTS5 MATCH is an SQLite-specific construct with no query-builder node.
+    // We use rawCond() as the documented escape hatch for dialect-specific syntax.
+    const { inner, on: joinOn } = require('../db/query');
+    const ftsConditions = [rawCond('"logs_fts" MATCH ?', [ftsQuery]), eq('l.user_id', req.user.userId)];
+    if (app)   ftsConditions.push(eq('l.app_name', app));
+    if (level) ftsConditions.push(eq('l.level',    level.toLowerCase()));
     const fromTs = toUnixSec(from);
     const toTs   = toUnixSec(to);
-    if (fromTs !== null) { extraFilters.push('AND l.timestamp >= ?'); extraParams.push(fromTs); }
-    if (toTs   !== null) { extraFilters.push('AND l.timestamp <= ?'); extraParams.push(toTs); }
+    if (fromTs !== null) ftsConditions.push(gte('l.timestamp', fromTs));
+    if (toTs   !== null) ftsConditions.push(lte('l.timestamp', toTs));
 
-    const filterStr = extraFilters.join(' ');
-
-    const baseParams  = [ftsQuery, req.user.userId, ...extraParams];
-    const queryParams = [...baseParams, limit, offset];
-
-    const selectSql = logsQ.ftsSelect(filterStr);
-    const countSql  = logsQ.ftsCount(filterStr);
+    const ftsWhere = and(...ftsConditions);
+    const logsJoin = inner('logs', joinOn('logs_fts.rowid', 'l.id'), 'l');
 
     try {
-      rows  = await db.all(selectSql, queryParams);
-      const countRow = await db.get(countSql, baseParams);
+      rows = await db.query(
+        new SelectQuery('logs_fts')
+          .columns([
+            col('l.id'), col('l.app_name'), col('l.level'),
+            col('l.message'), col('l.metadata'), col('l.raw'), col('l.timestamp'),
+          ])
+          .join(logsJoin)
+          .where(ftsWhere)
+          .orderBy('l.timestamp', 'DESC')
+          .limit(limit).offset(offset)
+      );
+      const countRow = await db.query(
+        new SelectQuery('logs_fts')
+          .columns([aliasExpr(count(), 'count')])
+          .join(logsJoin)
+          .where(ftsWhere)
+          .single()
+      );
       total = countRow ? Number(countRow.count) : 0;
     } catch (ftsErr) {
       console.error('[fts] query error:', ftsErr.message);
@@ -126,21 +144,30 @@ router.get('/', sessionAuth, wrap(async (req, res) => {
     }
   } else {
     // ── Regular filtered query ─────────────────────────────────────────────
-    const where  = ['user_id = ?'];
-    const params = [req.user.userId];
-
-    if (app)  { where.push('app_name = ?'); params.push(app); }
-    if (level){ where.push('level = ?');    params.push(level.toLowerCase()); }
+    const conditions = [eq('user_id', req.user.userId)];
+    if (app)   conditions.push(eq('app_name', app));
+    if (level) conditions.push(eq('level',    level.toLowerCase()));
     const fromTs = toUnixSec(from);
     const toTs   = toUnixSec(to);
-    if (fromTs !== null) { where.push('timestamp >= ?'); params.push(fromTs); }
-    if (toTs   !== null) { where.push('timestamp <= ?'); params.push(toTs); }
+    if (fromTs !== null) conditions.push(gte('timestamp', fromTs));
+    if (toTs   !== null) conditions.push(lte('timestamp', toTs));
 
-    const whereClause = where.join(' AND ');
+    const where = and(...conditions);
 
-    rows = await db.all(logsQ.filteredSelect(whereClause), [...params, limit, offset]);
+    rows = await db.query(
+      new SelectQuery('logs')
+        .columns(['id', 'app_name', 'level', 'message', 'metadata', 'raw', 'timestamp'])
+        .where(where)
+        .orderBy('timestamp', 'DESC')
+        .limit(limit).offset(offset)
+    );
 
-    const countRow = await db.get(logsQ.filteredCount(whereClause), params);
+    const countRow = await db.query(
+      new SelectQuery('logs')
+        .columns([aliasExpr(count(), 'count')])
+        .where(where)
+        .single()
+    );
     total = countRow ? Number(countRow.count) : 0;
   }
 
@@ -161,7 +188,13 @@ router.get('/', sessionAuth, wrap(async (req, res) => {
 
 /* ── GET /logs/apps ─────────────────────────────────────────────────────────── */
 router.get('/apps', sessionAuth, wrap(async (req, res) => {
-  const apps = await db.all(logsQ.appNames, [req.user.userId]);
+  const apps = await db.query(
+    new SelectQuery('logs')
+      .columns([col('app_name')])
+      .where(eq('user_id', req.user.userId))
+      .distinct()
+      .orderBy('app_name')
+  );
   res.json(apps.map(r => r.app_name));
 }));
 

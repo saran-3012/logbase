@@ -79,6 +79,17 @@ class LibSQLAdapter extends BaseAdapter {
           lastInsertRowid: r.lastInsertRowid != null ? Number(r.lastInsertRowid) : null,
         };
       },
+      query: async (queryObject) => {
+        const LibSQLCompiler = require('../compilers/libsql');
+        const SelectQuery    = require('../query/select');
+        const { sql, params } = new LibSQLCompiler().compile(queryObject);
+        if (queryObject instanceof SelectQuery) {
+          const r = await tx.execute({ sql, args: params });
+          return queryObject._single ? (r.rows[0] ?? null) : r.rows;
+        }
+        const r = await tx.execute({ sql, args: params });
+        return { changes: r.rowsAffected, lastInsertRowid: r.lastInsertRowid != null ? Number(r.lastInsertRowid) : null };
+      },
     };
     try {
       const result = await fn(ctx);
@@ -88,6 +99,20 @@ class LibSQLAdapter extends BaseAdapter {
       await tx.rollback();
       throw err;
     }
+  }
+
+  // ── High-level query object API ─────────────────────────────────────────────
+
+  async query(queryObject) {
+    const LibSQLCompiler = require('../compilers/libsql');
+    const SelectQuery    = require('../query/select');
+
+    const { sql, params } = new LibSQLCompiler().compile(queryObject);
+
+    if (queryObject instanceof SelectQuery) {
+      return queryObject._single ? this.get(sql, params) : this.all(sql, params);
+    }
+    return this.run(sql, params);
   }
 
   // ── Schema compilation ───────────────────────────────────────────────────────

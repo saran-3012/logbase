@@ -71,6 +71,22 @@ class BaseAdapter {
     throw new Error(`${this.constructor.name} must implement transaction()`);
   }
 
+  /**
+   * Compile and execute a query object (SelectQuery, InsertQuery, UpdateQuery,
+   * DeleteQuery) using the adapter's own compiler, then dispatch the result
+   * through get / all / run as appropriate.
+   *
+   * - SelectQuery with .single() → get() → first row or null
+   * - SelectQuery without .single() → all() → row array
+   * - InsertQuery / UpdateQuery / DeleteQuery → run() → { changes, lastInsertRowid }
+   *
+   * @param {object} queryObject  — a query builder instance
+   * @returns {Promise<object|object[]|{changes,lastInsertRowid}>}
+   */
+  async query(queryObject) {
+    throw new Error(`${this.constructor.name} must implement query()`);
+  }
+
   // ── Schema compilation ───────────────────────────────────────────────────────
 
   /**

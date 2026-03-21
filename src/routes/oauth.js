@@ -11,8 +11,8 @@ const router = express.Router();
 // Wrap async route handlers so unhandled rejections reach Express error handler
 const wrap = fn => (req, res, next) => fn(req, res, next).catch(next);
 
-const ACCESS_TOKEN_TTL  = 3600;           // 1 hour  (seconds)
-const REFRESH_TOKEN_TTL = 30 * 24 * 3600; // 30 days (seconds)
+const ACCESS_TOKEN_TTL  = parseInt(process.env.OAUTH_ACCESS_TOKEN_TTL,  10) || 3600;        // default 1 hour
+const REFRESH_TOKEN_TTL = parseInt(process.env.OAUTH_REFRESH_TOKEN_TTL, 10) || 2592000;     // default 30 days
 
 /* ── Helpers ────────────────────────────────────────────────────────────────── */
 

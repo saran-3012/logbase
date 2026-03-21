@@ -5,18 +5,26 @@
  *
  * To add a new backend (PostgreSQL, MySQL, …):
  *   1. Create src/db/adapters/<name>.js that extends BaseAdapter.
- *   2. Implement all five methods below.
+ *   2. Implement all methods below.
  *   3. Set DB_ADAPTER=<name> in environment variables.
- *   4. Provide adapter-specific DDL in src/db/schema/<name>.js if the SQL
- *      dialect differs from LibSQL/SQLite (e.g. unixepoch(), FTS5, triggers).
+ *
+ * Schema is defined as plain JSON in src/db/schema/:
+ *   tables.json     — table and column definitions (dialect-neutral)
+ *   indexes.json    — index definitions
+ *   migrations.json — ordered list of schema change operations
+ *
+ * Each adapter's compileSchema() / compileMigration() translates those
+ * neutral definitions into its own SQL dialect.
  *
  * All methods are async and return plain JS objects / arrays.
  */
 class BaseAdapter {
+  // ── Query methods ────────────────────────────────────────────────────────────
+
   /**
    * Execute a SELECT and return the first matching row, or null.
-   * @param {string}  sql
-   * @param {Array}   [params=[]]
+   * @param {string} sql
+   * @param {Array}  [params=[]]
    * @returns {Promise<object|null>}
    */
   async get(sql, params = []) {
@@ -25,8 +33,8 @@ class BaseAdapter {
 
   /**
    * Execute a SELECT and return all matching rows.
-   * @param {string}  sql
-   * @param {Array}   [params=[]]
+   * @param {string} sql
+   * @param {Array}  [params=[]]
    * @returns {Promise<object[]>}
    */
   async all(sql, params = []) {
@@ -34,9 +42,9 @@ class BaseAdapter {
   }
 
   /**
-   * Execute a write statement (INSERT / UPDATE / DELETE / DDL).
-   * @param {string}  sql
-   * @param {Array}   [params=[]]
+   * Execute a write statement (INSERT / UPDATE / DELETE).
+   * @param {string} sql
+   * @param {Array}  [params=[]]
    * @returns {Promise<{ changes: number, lastInsertRowid: number|null }>}
    */
   async run(sql, params = []) {
@@ -44,9 +52,8 @@ class BaseAdapter {
   }
 
   /**
-   * Execute one or more DDL statements with no parameters.
-   * Accepts either a single SQL string or an array of SQL strings;
-   * each string must be exactly one statement.
+   * Execute one or more raw DDL strings with no parameters.
+   * Accepts a single string or an array of strings (one statement each).
    * @param {string|string[]} statements
    * @returns {Promise<void>}
    */
@@ -56,15 +63,58 @@ class BaseAdapter {
 
   /**
    * Run an async function atomically inside a transaction.
-   * The function receives a context object { get, all, run } whose calls
-   * are scoped to the open transaction.
-   * Returns whatever the function returns.
+   * The function receives a context { get, all, run } scoped to the transaction.
    * @param {function} fn
    * @returns {Promise<any>}
    */
   async transaction(fn) {
     throw new Error(`${this.constructor.name} must implement transaction()`);
   }
+
+  // ── Schema compilation ───────────────────────────────────────────────────────
+
+  /**
+   * Compile neutral table + index definitions (from JSON) into an array of
+   * DDL strings ready to be passed to exec().
+   *
+   * Supported column properties:
+   *   type          — 'integer' | 'text' | 'real' | 'blob'
+   *   primaryKey    — boolean
+   *   notNull       — boolean
+   *   unique        — boolean (column-level)
+   *   default       — scalar value, or the string "now" (adapter maps to its timestamp fn)
+   *   references    — { table, column, onDelete: 'CASCADE' | 'SET NULL' | 'RESTRICT' }
+   *
+   * Supported table properties:
+   *   uniqueConstraints  — array of column-name arrays for multi-column UNIQUE
+   *   fullTextSearch     — { columns: string[] }  (adapter chooses FTS mechanism)
+   *
+   * @param {object[]} tables   — parsed tables.json
+   * @param {object[]} indexes  — parsed indexes.json
+   * @returns {string[]}
+   */
+  compileSchema(tables, indexes) {
+    throw new Error(`${this.constructor.name} must implement compileSchema()`);
+  }
+
+  /**
+   * Compile a single migration operation object into an array of DDL strings.
+   *
+   * Supported operation types:
+   *   { type: 'addColumn',    table, column: { name, type, notNull, default, references } }
+   *   { type: 'addIndex',     name, table, columns }
+   *   { type: 'dropIndex',    name }
+   *   { type: 'renameColumn', table, from, to }        — not supported by all backends
+   *
+   * Baseline-only entry (version 1 with no type) returns an empty array.
+   *
+   * @param {object} migration  — one entry from migrations.json
+   * @returns {string[]}
+   */
+  compileMigration(migration) {
+    throw new Error(`${this.constructor.name} must implement compileMigration()`);
+  }
 }
 
 module.exports = BaseAdapter;
+

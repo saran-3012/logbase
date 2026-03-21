@@ -1,0 +1,6 @@
+[
+  { "name": "idx_logs_user_ts",  "table": "logs",                 "columns": ["user_id", "timestamp DESC"] },
+  { "name": "idx_logs_level",    "table": "logs",                 "columns": ["level"] },
+  { "name": "idx_logs_app_name", "table": "logs",                 "columns": ["app_name"] },
+  { "name": "idx_rt_client",     "table": "oauth_refresh_tokens", "columns": ["client_db_id"] }
+]

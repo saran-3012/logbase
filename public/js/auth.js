@@ -1,94 +1,98 @@
 'use strict';
 
-function switchTab(tab) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-pane').forEach(p => p.classList.add('hidden'));
-  document.querySelector(`.tab-btn[data-tab="${tab}"]`).classList.add('active');
-  document.getElementById(`tab-${tab}`).classList.remove('hidden');
-  document.getElementById('alert-msg').classList.add('hidden');
+const $ = (id) => document.getElementById(id);
+
+function notice(message, kind = 'err') {
+  const cls = kind === 'ok' ? 'note-ok' : kind === 'warn' ? 'note-warn' : 'note-err';
+  $('auth-notice').innerHTML = `<div class="note ${cls}" style="margin-bottom:16px">
+    <span>${String(message).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</span>
+  </div>`;
 }
 
-function showAlert(msg, type = 'error') {
-  const el = document.getElementById('alert-msg');
-  el.textContent = msg;
-  el.className = `alert alert-${type}`;
-  el.classList.remove('hidden');
+function clearNotice() { $('auth-notice').innerHTML = ''; }
+
+function switchTab(tab) {
+  document.querySelectorAll('.auth-tabs button').forEach(b => {
+    const on = b.dataset.tab === tab;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', String(on));
+  });
+  $('login-form').classList.toggle('hidden', tab !== 'login');
+  $('register-form').classList.toggle('hidden', tab !== 'register');
+  clearNotice();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Already signed in → go to dashboard
   if (localStorage.getItem('authToken')) {
     window.location.href = '/dashboard.html';
     return;
   }
 
-  // Tab switching
-  document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
-  });
+  document.querySelectorAll('.auth-tabs button')
+    .forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
 
-  /* ── Login ── */
-  document.getElementById('login-form').addEventListener('submit', async (e) => {
+  /* ── Sign in ─────────────────────────────────────────────────────────── */
+  $('login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const btn      = e.target.querySelector('button[type="submit"]');
-    const username = document.getElementById('login-username').value.trim();
-    const password = document.getElementById('login-password').value;
-
-    btn.disabled    = true;
-    btn.textContent = 'Signing in…';
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    clearNotice();
 
     try {
-      const res  = await fetch('/auth/login', {
-        method:  'POST',
+      const res = await fetch('/auth/login', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ username, password })
+        body: JSON.stringify({
+          username: $('login-username').value.trim(),
+          password: $('login-password').value,
+        }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Login failed');
+      if (!res.ok) throw new Error(data.error || 'Sign in failed');
 
       localStorage.setItem('authToken', data.token);
-      localStorage.setItem('authUser',  data.username);
+      localStorage.setItem('authUser', data.username);
       window.location.href = '/dashboard.html';
     } catch (err) {
-      showAlert(err.message);
-      btn.disabled    = false;
-      btn.textContent = 'Sign In';
+      notice(err.message);
+      btn.disabled = false; btn.textContent = 'Sign in';
     }
   });
 
-  /* ── Register ── */
-  document.getElementById('register-form').addEventListener('submit', async (e) => {
+  /* ── Register ────────────────────────────────────────────────────────── */
+  $('register-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const btn       = e.target.querySelector('button[type="submit"]');
-    const username  = document.getElementById('reg-username').value.trim();
-    const email     = document.getElementById('reg-email').value.trim();
-    const password  = document.getElementById('reg-password').value;
-    const confirmPw = document.getElementById('reg-confirm').value;
+    const password = $('reg-password').value;
 
-    if (password !== confirmPw) { showAlert('Passwords do not match'); return; }
-    if (password.length < 8)   { showAlert('Password must be at least 8 characters'); return; }
+    if (password !== $('reg-confirm').value) return notice('Passwords do not match');
+    if (password.length < 8)                 return notice('Password must be at least 8 characters');
 
-    btn.disabled    = true;
-    btn.textContent = 'Creating account…';
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.textContent = 'Creating account…';
+    clearNotice();
 
     try {
-      const res  = await fetch('/auth/register', {
-        method:  'POST',
+      const res = await fetch('/auth/register', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ username, email, password })
+        body: JSON.stringify({
+          username: $('reg-username').value.trim(),
+          email:    $('reg-email').value.trim(),
+          password,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Registration failed');
 
-      showAlert('Account created! You can now sign in.', 'success');
-      switchTab('login');
-      document.getElementById('login-username').value = username;
+      const username = $('reg-username').value.trim();
       e.target.reset();
+      switchTab('login');
+      $('login-username').value = username;
+      notice('Account created — sign in to continue.', 'ok');
     } catch (err) {
-      showAlert(err.message);
+      notice(err.message);
     } finally {
-      btn.disabled    = false;
-      btn.textContent = 'Create Account';
+      btn.disabled = false; btn.textContent = 'Create account';
     }
   });
 });

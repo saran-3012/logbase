@@ -202,6 +202,29 @@ const j = async (path, opts = {}) => {
     body: JSON.stringify([{ app: 'svc', message: 'old token' }]) });
   ok('old token invalid after rotate', r.status === 401, JSON.stringify(r.body));
 
+  // ── Dashboard contract ────────────────────────────────────────────────
+  // The UI is static + fetch-driven, so these two checks are what protect it:
+  // the aggregate endpoint it renders from, and the assets it loads.
+  r = await j('/logs/stats?buckets=60', { headers: auth });
+  ok('GET /logs/stats', r.status === 200, JSON.stringify(r.body && r.body.range));
+  ok('stats returns 60 buckets', (r.body.buckets || []).length === 60);
+  ok('stats returns a level breakdown',
+    r.body.levels && typeof r.body.levels.error === 'number', JSON.stringify(r.body.levels));
+  const bucketSum = (r.body.buckets || []).reduce((a, b) => a + b.total, 0);
+  ok('histogram total matches level total', bucketSum === r.body.total, `${bucketSum} vs ${r.body.total}`);
+
+  r = await j('/logs/stats?level=error', { headers: auth });
+  ok('level filter does not narrow the level breakdown',
+    r.body.levels && r.body.levels.info > 0, JSON.stringify(r.body.levels));
+
+  r = await j('/logs?level=error,warn&limit=200', { headers: auth });
+  ok('multi-level filter accepted', r.status === 200, JSON.stringify(r.body && r.body.pagination));
+
+  for (const asset of ['/', '/dashboard.html', '/css/app.css', '/js/dashboard.js', '/js/auth.js', '/favicon.svg']) {
+    const res = await fetch(BASE + asset);
+    ok(`static asset ${asset}`, res.status === 200, `status ${res.status}`);
+  }
+
   // delete
   r = await j(`/collectors/${udpId}`, { method: 'DELETE', headers: auth });
   ok('delete udp collector', r.status === 200, JSON.stringify(r.body));

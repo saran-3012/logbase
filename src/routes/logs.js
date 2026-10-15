@@ -7,13 +7,17 @@ const { parsePayload, PayloadError } = require('../ingest/formats');
 const { storeEvents, recordRejection } = require('../ingest/pipeline');
 const {
   SelectQuery,
-  eq, lte, gte, and, rawCond, aliasExpr, col, count,
+  eq, lte, gte, and, inList, rawCond, rawExpr, aliasExpr, col, count,
+  inner, on,
 } = require('../db/query');
 
 const router = express.Router();
 
 // Wrap async route handlers so unhandled rejections reach Express error handler
 const wrap = fn => (req, res, next) => fn(req, res, next).catch(next);
+
+/** Levels the dashboard renders as filter pills, in display order. */
+const KNOWN_LEVELS = ['error', 'warn', 'info', 'debug', 'trace'];
 
 /* ── Helpers ────────────────────────────────────────────────────────────────── */
 
@@ -46,6 +50,73 @@ function toUnixSec(value) {
 }
 
 /**
+ * Accept `level=error` or `level=error,warn` (the dashboard's level pills are
+ * multi-select). Unknown values are dropped rather than returning no rows.
+ */
+function parseLevels(raw) {
+  if (!raw) return [];
+  return String(raw)
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Build the shared FROM/WHERE for a log query.
+ *
+ * Full-text search runs against the `logs_fts` virtual table joined back to
+ * `logs` (aliased `l`), so every column reference needs an `l.` prefix in that
+ * mode — `prefix` carries it for callers.
+ *
+ * @param {object}  req
+ * @param {boolean} [opts.applyLevel=true] omit the level filter so the level
+ *                  pills can show counts that are not narrowed by themselves.
+ */
+function buildQueryContext(req, { applyLevel = true } = {}) {
+  const { search, app, from, to } = req.query;
+  const collectorId = req.query.collector ? parseInt(req.query.collector, 10) : null;
+  const levels      = applyLevel ? parseLevels(req.query.level) : [];
+
+  const ftsQuery = search ? buildFtsQuery(search) : null;
+  const useFts   = Boolean(ftsQuery);
+  const prefix   = useFts ? 'l.' : '';
+
+  const conditions = [];
+  // FTS5 MATCH is an SQLite-specific construct with no query-builder node.
+  // rawCond() is the documented escape hatch for dialect-specific syntax.
+  if (useFts) conditions.push(rawCond('"logs_fts" MATCH ?', [ftsQuery]));
+
+  conditions.push(eq(`${prefix}user_id`, req.user.userId));
+  if (app) conditions.push(eq(`${prefix}app_name`, app));
+
+  if (levels.length === 1)      conditions.push(eq(`${prefix}level`, levels[0]));
+  else if (levels.length > 1)   conditions.push(inList(`${prefix}level`, levels));
+
+  if (Number.isInteger(collectorId)) conditions.push(eq(`${prefix}collector_id`, collectorId));
+
+  const fromTs = toUnixSec(from);
+  const toTs   = toUnixSec(to);
+  if (fromTs !== null) conditions.push(gte(`${prefix}timestamp`, fromTs));
+  if (toTs   !== null) conditions.push(lte(`${prefix}timestamp`, toTs));
+
+  return {
+    useFts,
+    prefix,
+    table: useFts ? 'logs_fts' : 'logs',
+    join:  useFts ? inner('logs', on('logs_fts.rowid', 'l.id'), 'l') : null,
+    where: and(...conditions),
+    fromTs,
+    toTs,
+  };
+}
+
+/** Apply a context's FROM/JOIN/WHERE to a SelectQuery. */
+function applyContext(query, ctx) {
+  if (ctx.join) query.join(ctx.join);
+  return query.where(ctx.where);
+}
+
+/**
  * Recover the exact bytes the client sent.
  * server.js installs a raw-body capture for JSON and a text parser for NDJSON,
  * so formats.js remains the single place where payloads are interpreted.
@@ -55,6 +126,21 @@ function rawPayload(req) {
   if (typeof req.body === 'string')      return req.body;
   if (req.body && typeof req.body === 'object') return JSON.stringify(req.body);
   return '';
+}
+
+/** Resolve collector names for a page of rows in a single query. */
+async function resolveCollectors(rows, userId) {
+  const map = new Map();
+  const ids = [...new Set(rows.map(r => r.collector_id).filter(v => v != null).map(Number))];
+  if (!ids.length) return map;
+
+  const collectors = await db.query(
+    new SelectQuery('collectors')
+      .columns(['id', 'name', 'transfer_type'])
+      .where(and(eq('user_id', userId), inList('id', ids)))
+  );
+  for (const c of collectors) map.set(Number(c.id), c);
+  return map;
 }
 
 /* ── POST /logs ─────────────────────────────────────────────────────────────── */
@@ -96,104 +182,51 @@ router.post('/', collectorAuth, wrap(async (req, res) => {
 
 /* ── GET /logs ──────────────────────────────────────────────────────────────── */
 router.get('/', sessionAuth, wrap(async (req, res) => {
-  const { search, app, level, from, to } = req.query;
-  const collectorId = req.query.collector ? parseInt(req.query.collector, 10) : null;
   const page   = Math.max(1, parseInt(req.query.page,  10) || 1);
   const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
   const offset = (page - 1) * limit;
 
-  let rows, total;
+  const ctx = buildQueryContext(req);
+  const p   = ctx.prefix;
 
-  const ftsQuery = search ? buildFtsQuery(search) : null;
+  let rows = [];
+  let total = 0;
 
-  if (ftsQuery) {
-    // ── Full-text search via FTS5 ──────────────────────────────────────────
-    // FTS5 MATCH is an SQLite-specific construct with no query-builder node.
-    // We use rawCond() as the documented escape hatch for dialect-specific syntax.
-    const { inner, on: joinOn } = require('../db/query');
-    const ftsConditions = [rawCond('"logs_fts" MATCH ?', [ftsQuery]), eq('l.user_id', req.user.userId)];
-    if (app)   ftsConditions.push(eq('l.app_name', app));
-    if (level) ftsConditions.push(eq('l.level',    level.toLowerCase()));
-    if (Number.isInteger(collectorId)) ftsConditions.push(eq('l.collector_id', collectorId));
-    const fromTs = toUnixSec(from);
-    const toTs   = toUnixSec(to);
-    if (fromTs !== null) ftsConditions.push(gte('l.timestamp', fromTs));
-    if (toTs   !== null) ftsConditions.push(lte('l.timestamp', toTs));
-
-    const ftsWhere = and(...ftsConditions);
-    const logsJoin = inner('logs', joinOn('logs_fts.rowid', 'l.id'), 'l');
-
-    try {
-      rows = await db.query(
-        new SelectQuery('logs_fts')
-          .columns([
-            col('l.id'), col('l.app_name'), col('l.level'),
-            col('l.message'), col('l.metadata'), col('l.raw'), col('l.timestamp'),
-            col('l.collector_id'),
-          ])
-          .join(logsJoin)
-          .where(ftsWhere)
-          .orderBy('l.timestamp', 'DESC')
-          .limit(limit).offset(offset)
-      );
-      const countRow = await db.query(
-        new SelectQuery('logs_fts')
-          .columns([aliasExpr(count(), 'count')])
-          .join(logsJoin)
-          .where(ftsWhere)
-          .single()
-      );
-      total = countRow ? Number(countRow.count) : 0;
-    } catch (ftsErr) {
-      console.error('[fts] query error:', ftsErr.message);
-      rows  = [];
-      total = 0;
-    }
-  } else {
-    // ── Regular filtered query ─────────────────────────────────────────────
-    const conditions = [eq('user_id', req.user.userId)];
-    if (app)   conditions.push(eq('app_name', app));
-    if (level) conditions.push(eq('level',    level.toLowerCase()));
-    if (Number.isInteger(collectorId)) conditions.push(eq('collector_id', collectorId));
-    const fromTs = toUnixSec(from);
-    const toTs   = toUnixSec(to);
-    if (fromTs !== null) conditions.push(gte('timestamp', fromTs));
-    if (toTs   !== null) conditions.push(lte('timestamp', toTs));
-
-    const where = and(...conditions);
-
+  try {
     rows = await db.query(
-      new SelectQuery('logs')
-        .columns(['id', 'app_name', 'level', 'message', 'metadata', 'raw', 'timestamp', 'collector_id'])
-        .where(where)
-        .orderBy('timestamp', 'DESC')
+      applyContext(
+        new SelectQuery(ctx.table).columns([
+          col(`${p}id`), col(`${p}app_name`), col(`${p}level`), col(`${p}message`),
+          col(`${p}metadata`), col(`${p}raw`), col(`${p}timestamp`), col(`${p}collector_id`),
+        ]),
+        ctx
+      )
+        .orderBy(`${p}timestamp`, 'DESC')
+        .orderBy(`${p}id`, 'DESC')
         .limit(limit).offset(offset)
     );
 
     const countRow = await db.query(
-      new SelectQuery('logs')
-        .columns([aliasExpr(count(), 'count')])
-        .where(where)
-        .single()
+      applyContext(new SelectQuery(ctx.table).columns([aliasExpr(count(), 'count')]), ctx).single()
     );
     total = countRow ? Number(countRow.count) : 0;
+  } catch (err) {
+    // A malformed FTS expression must degrade to "no results", not a 500.
+    if (!ctx.useFts) throw err;
+    console.error('[fts] query error:', err.message);
+    rows  = [];
+    total = 0;
   }
 
-  // Resolve collector names for the returned page in one query.
-  const collectorNames = new Map();
-  const ids = [...new Set(rows.map(r => r.collector_id).filter(v => v != null).map(Number))];
-  if (ids.length) {
-    const { inList } = require('../db/query');
-    const collectors = await db.query(
-      new SelectQuery('collectors')
-        .columns(['id', 'name', 'transfer_type'])
-        .where(and(eq('user_id', req.user.userId), inList('id', ids)))
-    );
-    for (const c of collectors) collectorNames.set(Number(c.id), c);
-  }
+  const collectorNames = await resolveCollectors(rows, req.user.userId);
 
   const logs = rows.map(r => {
     const c = r.collector_id != null ? collectorNames.get(Number(r.collector_id)) : null;
+    let metadata = {};
+    try { metadata = JSON.parse(r.metadata); } catch { /* keep {} */ }
+    let raw = null;
+    try { raw = JSON.parse(r.raw); } catch { /* keep null */ }
+
     return {
       id:             r.id,
       app_name:       r.app_name,
@@ -203,13 +236,110 @@ router.get('/', sessionAuth, wrap(async (req, res) => {
       collector_id:   r.collector_id != null ? Number(r.collector_id) : null,
       collector_name: c ? c.name : null,
       transfer_type:  c ? c.transfer_type : null,
-      metadata:       (() => { try { return JSON.parse(r.metadata); } catch { return {}; } })(),
+      metadata,
+      raw,
     };
   });
 
   res.json({
     logs,
     pagination: { page, limit, total, pages: Math.ceil(total / limit) }
+  });
+}));
+
+/* ── GET /logs/stats ────────────────────────────────────────────────────────── */
+/**
+ * Aggregates powering the dashboard's level pills and the event-volume
+ * histogram. Accepts exactly the same filters as GET /logs.
+ *
+ * The level breakdown deliberately ignores the `level` filter — the pills must
+ * keep showing how many events each level has, including the ones filtered out.
+ */
+router.get('/stats', sessionAuth, wrap(async (req, res) => {
+  const BUCKETS = Math.min(120, Math.max(12, parseInt(req.query.buckets, 10) || 60));
+
+  // Level counts: every filter except `level`.
+  const levelCtx = buildQueryContext(req, { applyLevel: false });
+  const lp       = levelCtx.prefix;
+
+  let levelRows = [];
+  try {
+    levelRows = await db.query(
+      applyContext(
+        new SelectQuery(levelCtx.table).columns([
+          col(`${lp}level`),
+          aliasExpr(count(), 'c'),
+        ]),
+        levelCtx
+      ).groupBy([col(`${lp}level`)])
+    );
+  } catch (err) {
+    if (!levelCtx.useFts) throw err;
+    console.error('[fts] stats level query error:', err.message);
+  }
+
+  const levels = {};
+  for (const l of KNOWN_LEVELS) levels[l] = 0;
+  let totalUnfiltered = 0;
+  for (const row of levelRows) {
+    const key = String(row.level || 'unknown').toLowerCase();
+    levels[key] = (levels[key] || 0) + Number(row.c);
+    totalUnfiltered += Number(row.c);
+  }
+
+  // Histogram: all filters applied, bucketed across the selected window.
+  const nowSec  = Math.floor(Date.now() / 1000);
+  const barCtx  = buildQueryContext(req);
+  const bp      = barCtx.prefix;
+  const fromTs  = barCtx.fromTs !== null ? barCtx.fromTs : nowSec - 3600;
+  const toTs    = barCtx.toTs   !== null ? barCtx.toTs   : nowSec;
+  // Integer arithmetic only — interpolated into SQL, so it must never be user text.
+  const span      = Math.max(BUCKETS, toTs - fromTs);
+  const bucketSec = Math.max(1, Math.floor(span / BUCKETS));
+  const bucketSql = `((${bp ? '"l"."timestamp"' : '"timestamp"'} - ${fromTs}) / ${bucketSec})`;
+
+  let bucketRows = [];
+  try {
+    bucketRows = await db.query(
+      applyContext(
+        new SelectQuery(barCtx.table).columns([
+          aliasExpr(rawExpr(bucketSql), 'b'),
+          col(`${bp}level`),
+          aliasExpr(count(), 'c'),
+        ]),
+        barCtx
+      ).groupBy([rawExpr(bucketSql), col(`${bp}level`)])
+    );
+  } catch (err) {
+    if (!barCtx.useFts) throw err;
+    console.error('[fts] stats bucket query error:', err.message);
+  }
+
+  const buckets = Array.from({ length: BUCKETS }, (_, i) => ({
+    from:   (fromTs + i * bucketSec) * 1000,
+    to:     (fromTs + (i + 1) * bucketSec) * 1000,
+    total:  0,
+    levels: {},
+  }));
+
+  for (const row of bucketRows) {
+    const raw = Number(row.b);
+    if (!Number.isInteger(raw) || raw < 0) continue;
+    // An event landing exactly on `toTs` computes to index BUCKETS (one past the
+    // last slot). The WHERE clause already bounds the set, so clamp rather than
+    // drop — otherwise the newest events disappear from the histogram.
+    const idx = Math.min(BUCKETS - 1, raw);
+    const key = String(row.level || 'unknown').toLowerCase();
+    const n   = Number(row.c);
+    buckets[idx].levels[key] = (buckets[idx].levels[key] || 0) + n;
+    buckets[idx].total      += n;
+  }
+
+  res.json({
+    levels,
+    total: totalUnfiltered,
+    range: { from: fromTs * 1000, to: toTs * 1000, bucket_ms: bucketSec * 1000 },
+    buckets,
   });
 }));
 

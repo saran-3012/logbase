@@ -148,6 +148,68 @@
     }
     .token-form input:focus { border-color: var(--accent); }
 
+    /* ── Collector form ─────────────────────────────────────────────────── */
+    .collector-form { margin-bottom: 1.5rem; }
+    .cf-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: .85rem;
+      margin-bottom: .85rem;
+    }
+    .collector-form .fgroup { display: flex; flex-direction: column; gap: .35rem; }
+    .collector-form label {
+      font-size: .78rem; font-weight: 500; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .04em;
+    }
+    .collector-form input,
+    .collector-form select {
+      padding: .55rem .85rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: .9rem;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .collector-form input:focus,
+    .collector-form select:focus { border-color: var(--accent); }
+    .collector-form select option { background: var(--surface); }
+    .form-hint { font-size: .8rem; color: var(--muted); margin-bottom: .85rem; line-height: 1.5; }
+
+    /* ── Status badges ──────────────────────────────────────────────────── */
+    .status-badge {
+      display: inline-block;
+      padding: .15rem .55rem;
+      border-radius: 4px;
+      font-size: .72rem;
+      font-weight: 600;
+      letter-spacing: .03em;
+      white-space: nowrap;
+    }
+    .status-listening { background: rgba(34,197,94,.18);  color: #86efac; }
+    .status-warn      { background: rgba(245,158,11,.18); color: #fcd34d; }
+    .status-off       { background: rgba(100,116,139,.18); color: var(--muted); }
+    .status-error     { background: rgba(239,68,68,.18);  color: #fca5a5; }
+
+    /* ── Toggle switch ──────────────────────────────────────────────────── */
+    .switch { position: relative; display: inline-block; width: 38px; height: 21px; vertical-align: middle; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch .slider {
+      position: absolute; cursor: pointer; inset: 0;
+      background: var(--border); border-radius: 21px; transition: background .15s;
+    }
+    .switch .slider::before {
+      content: ''; position: absolute;
+      height: 15px; width: 15px; left: 3px; bottom: 3px;
+      background: #fff; border-radius: 50%; transition: transform .15s;
+    }
+    .switch input:checked + .slider { background: var(--success); }
+    .switch input:checked + .slider::before { transform: translateX(17px); }
+    .switch input:disabled + .slider { opacity: .5; cursor: not-allowed; }
+
+    .row-actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
+
     /* ── Table ──────────────────────────────────────────────────────────── */
     .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); }
     table { width: 100%; border-collapse: collapse; font-size: .875rem; }
@@ -395,8 +457,7 @@
     </a>
     <div class="nav-links">
       <button class="nav-link" data-section="logs">Logs</button>
-      <button class="nav-link" data-section="tokens">API Tokens</button>
-      <button class="nav-link" data-section="oauth">OAuth Clients</button>
+      <button class="nav-link" data-section="collectors">Collectors</button>
     </div>
     <div class="nav-right">
       <span id="username-display"></span>
@@ -484,100 +545,73 @@
       <div id="pagination"></div>
     </section>
 
-    <!-- ── OAuth Section ─────────────────────────────────────────────── -->
-    <section id="section-oauth" class="section hidden">
+    <!-- ── Collectors Section ─────────────────────────────────────────── -->
+    <section id="section-collectors" class="section hidden">
 
       <div class="section-header">
-        <h2>OAuth Clients</h2>
+        <h2>Collectors</h2>
+        <button class="btn btn-ghost btn-sm" onclick="loadCollectors()">&#8635; Refresh</button>
       </div>
 
       <p style="color:var(--muted);font-size:.875rem;margin-bottom:1.25rem;line-height:1.6;">
-        OAuth clients use the <strong style="color:var(--text)">Client Credentials</strong> grant (RFC&nbsp;6749).
-        Your app exchanges a <code>client_id</code> + <code>client_secret</code> for a short-lived Bearer token,
-        then uses that token to push logs — no user interaction required. Access tokens expire after <strong style="color:var(--text)">1 hour</strong>.
+        A <strong style="color:var(--text)">collector</strong> is one configured ingestion endpoint. Choose how data
+        arrives (<strong style="color:var(--text)">transfer type</strong>), how it is authenticated
+        (<strong style="color:var(--text)">auth method</strong>), and how batches are encoded
+        (<strong style="color:var(--text)">input format</strong>). Collectors can be enabled or disabled at any time.
       </p>
 
-      <div id="oauth-alert" class="alert hidden"></div>
+      <div id="collector-alert" class="alert hidden"></div>
+      <div id="udp-platform-note" class="alert hidden" style="background:rgba(245,158,11,.12);color:#fcd34d;border:1px solid rgba(245,158,11,.3);"></div>
 
       <!-- Create form -->
-      <form id="oauth-form" class="token-form">
-        <div class="fgroup">
-          <label for="oauth-client-name">New OAuth client name</label>
-          <input id="oauth-client-name" type="text" placeholder="e.g. billing-service, data-pipeline" required />
+      <form id="collector-form" class="collector-form">
+        <div class="cf-grid">
+          <div class="fgroup">
+            <label for="collector-name">Name</label>
+            <input id="collector-name" type="text" placeholder="e.g. edge-gateway" required />
+          </div>
+          <div class="fgroup">
+            <label for="collector-transfer">Transfer type</label>
+            <select id="collector-transfer"></select>
+          </div>
+          <div class="fgroup">
+            <label for="collector-auth">Auth method</label>
+            <select id="collector-auth"></select>
+          </div>
+          <div class="fgroup">
+            <label for="collector-format">Input format</label>
+            <select id="collector-format"></select>
+          </div>
+          <div class="fgroup hidden" id="fgroup-public-host">
+            <label for="collector-public-host">Public host</label>
+            <input id="collector-public-host" type="text" placeholder="e.g. logs.example.com" />
+          </div>
+          <div class="fgroup hidden" id="fgroup-port">
+            <label for="collector-port">Port</label>
+            <input id="collector-port" type="number" placeholder="10000" />
+          </div>
         </div>
-        <button type="submit" class="btn btn-primary">Create OAuth Client</button>
+        <p id="transfer-hint" class="form-hint"></p>
+        <button type="submit" class="btn btn-primary">Create Collector</button>
       </form>
 
-      <!-- Client list -->
+      <!-- Collector list -->
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
               <th>Name</th>
-              <th>Client ID</th>
-              <th>Created</th>
+              <th>Transfer</th>
+              <th>Auth</th>
+              <th>Format</th>
+              <th>Endpoint</th>
+              <th>Status</th>
+              <th>Events</th>
               <th></th>
             </tr>
           </thead>
-          <tbody id="oauth-client-list">
-            <tr><td colspan="4" class="loading-cell">Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <hr class="divider" />
-
-      <!-- OAuth Integration snippet -->
-      <div class="snippet-box">
-        <h3>OAuth Integration Guide</h3>
-        <div class="snippet-select-wrap">
-          <select id="oauth-snippet-client-select">
-            <option value="">— select a client —</option>
-          </select>
-        </div>
-        <div class="snippet-tabs">
-          <button class="oauth-snippet-tab active" data-lang="curl">curl</button>
-          <button class="oauth-snippet-tab" data-lang="node">Node.js</button>
-          <button class="oauth-snippet-tab" data-lang="python">Python</button>
-        </div>
-        <div id="oauth-snippet-curl" class="snippet-pane"><pre></pre></div>
-        <div id="oauth-snippet-node" class="snippet-pane hidden"><pre></pre></div>
-        <div id="oauth-snippet-python" class="snippet-pane hidden"><pre></pre></div>
-      </div>
-    </section>
-
-    <!-- ── Tokens Section ─────────────────────────────────────────────── -->
-    <section id="section-tokens" class="section hidden">
-
-      <div class="section-header">
-        <h2>API Tokens</h2>
-      </div>
-
-      <div id="token-alert" class="alert hidden"></div>
-
-      <!-- Create form -->
-      <form id="token-form" class="token-form">
-        <div class="fgroup">
-          <label for="token-name">New token name</label>
-          <input id="token-name" type="text" placeholder="e.g. my-webapp, backend-service" required />
-        </div>
-        <button type="submit" class="btn btn-primary">Create Token</button>
-      </form>
-
-      <!-- Token list -->
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Token (preview)</th>
-              <th>Created</th>
-              <th>Last Used</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="token-list">
-            <tr><td colspan="5" class="loading-cell">Loading…</td></tr>
+          <tbody id="collector-list">
+            <tr><td colspan="8" class="loading-cell">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -588,52 +622,26 @@
       <div class="snippet-box">
         <h3>Integration Guide</h3>
         <div class="snippet-select-wrap">
-          <select id="snippet-token-select">
-            <option value="">— select a token —</option>
+          <select id="snippet-collector-select">
+            <option value="">— select a collector —</option>
           </select>
         </div>
-        <div class="snippet-tabs">
-          <button class="snippet-tab active" data-lang="curl">curl</button>
-          <button class="snippet-tab" data-lang="node">Node.js</button>
-          <button class="snippet-tab" data-lang="python">Python</button>
-        </div>
-        <div id="snippet-curl" class="snippet-pane"><pre></pre></div>
-        <div id="snippet-node" class="snippet-pane hidden"><pre></pre></div>
-        <div id="snippet-python" class="snippet-pane hidden"><pre></pre></div>
+        <div class="snippet-tabs" id="snippet-tabs"></div>
+        <div id="snippet-pane" class="snippet-pane"><pre></pre></div>
       </div>
     </section>
 
   </main>
 
-  <!-- OAuth client credentials modal -->
-  <div id="oauth-modal" class="modal-overlay hidden">
+  <!-- Credentials modal (shown once, after create or rotate) -->
+  <div id="secret-modal" class="modal-overlay hidden">
     <div class="modal">
-      <h3>OAuth client created: <span id="oauth-modal-name"></span></h3>
-      <p>Copy these credentials now — the <strong>client_secret</strong> will not be shown again.</p>
-      <div style="margin-bottom:.75rem;">
-        <div class="expand-label" style="margin-bottom:.3rem;">client_id</div>
-        <div class="token-display" id="oauth-modal-client-id" style="color:#a5b4fc;"></div>
-      </div>
-      <div style="margin-bottom:1rem;">
-        <div class="expand-label" style="margin-bottom:.3rem;">client_secret</div>
-        <div class="token-display" id="oauth-modal-client-secret"></div>
-      </div>
+      <h3 id="secret-modal-title">Collector created</h3>
+      <p>Copy these credentials now — they will not be shown again.</p>
+      <div id="secret-modal-body"></div>
       <div class="modal-actions">
-        <button class="btn btn-ghost" onclick="copyOAuthCredentials()">Copy both</button>
-        <button class="btn btn-primary" onclick="closeOAuthModal()">Done</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Token created modal -->
-  <div id="token-modal" class="modal-overlay hidden">
-    <div class="modal">
-      <h3>Token created: <span id="modal-token-name"></span></h3>
-      <p>Copy this token now — it will not be shown again.</p>
-      <div class="token-display" id="modal-token-value"></div>
-      <div class="modal-actions">
-        <button id="copy-token-btn" class="btn btn-ghost" onclick="copyModalToken()">Copy</button>
-        <button class="btn btn-primary" onclick="closeTokenModal()">Done</button>
+        <button id="copy-secret-btn" class="btn btn-ghost" onclick="copySecrets()">Copy</button>
+        <button class="btn btn-primary" onclick="closeSecretModal()">Done</button>
       </div>
     </div>
   </div>

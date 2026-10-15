@@ -24,9 +24,21 @@ const db = new AdapterClass(AdapterClass.configFromEnv());
 // Called once at server startup (in server.js) before app.listen().
 // Compiles schema from JSON definitions and applies any pending migrations.
 async function init() {
-  // Compile neutral JSON schema → dialect-specific DDL and execute
-  const ddl = db.compileSchema(tables, indexes);
-  await db.exec(ddl);
+  // ── Order matters ───────────────────────────────────────────────────────────
+  // Migrations run BEFORE the schema DDL, not after.
+  //
+  // The DDL is written against the *current* schema. On an existing database
+  // still carrying an older schema, a statement like
+  //   CREATE INDEX idx_logs_collector ON logs(collector_id)
+  // fails with "no such column" because the migration that rebuilds `logs`
+  // hasn't run yet. Running migrations first brings the database up to the
+  // shape the DDL expects; the DDL (all CREATE … IF NOT EXISTS) then fills in
+  // whatever the migrations dropped or never created.
+  //
+  // Bootstrap just the version table so the migration runner has somewhere to
+  // read from — it is never touched by migrations.
+  const versionTable = tables.filter(t => t.name === '_schema_version');
+  await db.exec(db.compileSchema(versionTable, []));
 
   // Seed version row on first run
   const versionRow = await db.query(
@@ -54,6 +66,12 @@ async function init() {
       await db.query(new UpdateQuery('_schema_version').set({ version: i + 1 }));
     }
   }
+
+  // Schema DDL — runs after migrations so it always sees the up-to-date shape.
+  // Creates anything missing: a fresh database in full, or the objects a
+  // destructive migration just dropped. Every statement is CREATE … IF NOT
+  // EXISTS, so it is a no-op on an already-current database.
+  await db.exec(db.compileSchema(tables, indexes));
 
   console.log('[db] Initialized');
 }

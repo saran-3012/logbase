@@ -1,6 +1,27 @@
 [
-  { "name": "idx_logs_user_ts",  "table": "logs",                 "columns": ["user_id", "timestamp DESC"] },
-  { "name": "idx_logs_level",    "table": "logs",                 "columns": ["level"] },
-  { "name": "idx_logs_app_name", "table": "logs",                 "columns": ["app_name"] },
-  { "name": "idx_rt_client",     "table": "oauth_refresh_tokens", "columns": ["client_db_id"] }
+  { "name": "idx_logs_user_ts",             "table": "logs",                  "columns": ["user_id", "timestamp DESC"] },
+  { "name": "idx_logs_level",               "table": "logs",                  "columns": ["level"] },
+  { "name": "idx_logs_app_name",            "table": "logs",                  "columns": ["app_name"] },
+  { "name": "idx_logs_collector",           "table": "logs",                  "columns": ["collector_id"] },
+  { "name": "idx_rt_collector",             "table": "oauth_refresh_tokens",  "columns": ["collector_id"] },
+  { "name": "idx_collectors_user",          "table": "collectors",            "columns": ["user_id"] },
+  { "name": "idx_collector_cred_token",     "table": "collector_credentials", "columns": ["token"] },
+  { "name": "idx_collector_cred_public_id", "table": "collector_credentials", "columns": ["public_id"] },
+
+  {
+    "name": "uq_udp_per_user",
+    "table": "collectors",
+    "columns": ["user_id"],
+    "unique": true,
+    "where": "transfer_type = 'udp'",
+    "comment": "Enforces at most one UDP collector per user at the database level."
+  },
+  {
+    "name": "uq_udp_port",
+    "table": "collectors",
+    "columns": ["port"],
+    "unique": true,
+    "where": "transfer_type = 'udp'",
+    "comment": "Dedicated port per UDP collector — no two collectors may claim the same port."
+  }
 ]

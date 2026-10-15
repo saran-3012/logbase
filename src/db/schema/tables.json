@@ -10,17 +10,41 @@
     ]
   },
   {
-    "name": "api_tokens",
+    "name": "collectors",
+    "comment": "A collector is one configured ingestion endpoint: transfer type (http/udp) + auth method + input format. Replaces the old api_tokens / oauth_clients split.",
     "columns": [
-      { "name": "id",           "type": "integer", "primaryKey": true },
-      { "name": "user_id",      "type": "integer", "notNull": true, "references": { "table": "users", "column": "id", "onDelete": "CASCADE" } },
-      { "name": "name",         "type": "text",    "notNull": true },
-      { "name": "token",        "type": "text",    "notNull": true, "unique": true },
-      { "name": "created_at",   "type": "integer", "notNull": true, "default": "now" },
-      { "name": "last_used_at", "type": "integer" }
+      { "name": "id",              "type": "integer", "primaryKey": true },
+      { "name": "user_id",         "type": "integer", "notNull": true, "references": { "table": "users", "column": "id", "onDelete": "CASCADE" } },
+      { "name": "name",            "type": "text",    "notNull": true },
+      { "name": "transfer_type",   "type": "text",    "notNull": true },
+      { "name": "auth_method",     "type": "text",    "notNull": true },
+      { "name": "input_format",    "type": "text",    "notNull": true, "default": "json_array" },
+      { "name": "enabled",         "type": "integer", "notNull": true, "default": 1 },
+      { "name": "bind_host",       "type": "text" },
+      { "name": "public_host",     "type": "text" },
+      { "name": "port",            "type": "integer" },
+      { "name": "created_at",      "type": "integer", "notNull": true, "default": "now" },
+      { "name": "last_event_at",   "type": "integer" },
+      { "name": "events_received", "type": "integer", "notNull": true, "default": 0 },
+      { "name": "packets_received","type": "integer", "notNull": true, "default": 0 },
+      { "name": "rejected_count",  "type": "integer", "notNull": true, "default": 0 }
     ],
     "uniqueConstraints": [
       ["user_id", "name"]
+    ]
+  },
+  {
+    "name": "collector_credentials",
+    "comment": "Credentials attached to an HTTP collector. kind='api_token' uses token; kind='oauth_client' uses public_id + secret_hash. UDP collectors have no credential rows.",
+    "columns": [
+      { "name": "id",           "type": "integer", "primaryKey": true },
+      { "name": "collector_id", "type": "integer", "notNull": true, "references": { "table": "collectors", "column": "id", "onDelete": "CASCADE" } },
+      { "name": "kind",         "type": "text",    "notNull": true },
+      { "name": "token",        "type": "text",    "unique": true },
+      { "name": "public_id",    "type": "text",    "unique": true },
+      { "name": "secret_hash",  "type": "text" },
+      { "name": "created_at",   "type": "integer", "notNull": true, "default": "now" },
+      { "name": "last_used_at", "type": "integer" }
     ]
   },
   {
@@ -29,29 +53,15 @@
       "columns": ["app_name", "level", "message", "metadata"]
     },
     "columns": [
-      { "name": "id",        "type": "integer", "primaryKey": true },
-      { "name": "user_id",   "type": "integer", "notNull": true, "references": { "table": "users",      "column": "id", "onDelete": "CASCADE"  } },
-      { "name": "token_id",  "type": "integer",                  "references": { "table": "api_tokens", "column": "id", "onDelete": "SET NULL" } },
-      { "name": "app_name",  "type": "text",    "notNull": true, "default": "unknown" },
-      { "name": "level",     "type": "text",    "notNull": true, "default": "info" },
-      { "name": "message",   "type": "text",    "notNull": true, "default": "" },
-      { "name": "metadata",  "type": "text",    "notNull": true, "default": "{}" },
-      { "name": "raw",       "type": "text",    "notNull": true, "default": "{}" },
-      { "name": "timestamp", "type": "integer", "notNull": true, "default": "now" }
-    ]
-  },
-  {
-    "name": "oauth_clients",
-    "columns": [
-      { "name": "id",                 "type": "integer", "primaryKey": true },
-      { "name": "user_id",            "type": "integer", "notNull": true, "references": { "table": "users", "column": "id", "onDelete": "CASCADE" } },
-      { "name": "name",               "type": "text",    "notNull": true },
-      { "name": "client_id",          "type": "text",    "notNull": true, "unique": true },
-      { "name": "client_secret_hash", "type": "text",    "notNull": true },
-      { "name": "created_at",         "type": "integer", "notNull": true, "default": "now" }
-    ],
-    "uniqueConstraints": [
-      ["user_id", "name"]
+      { "name": "id",           "type": "integer", "primaryKey": true },
+      { "name": "user_id",      "type": "integer", "notNull": true, "references": { "table": "users",      "column": "id", "onDelete": "CASCADE"  } },
+      { "name": "collector_id", "type": "integer",                  "references": { "table": "collectors", "column": "id", "onDelete": "SET NULL" } },
+      { "name": "app_name",     "type": "text",    "notNull": true, "default": "unknown" },
+      { "name": "level",        "type": "text",    "notNull": true, "default": "info" },
+      { "name": "message",      "type": "text",    "notNull": true, "default": "" },
+      { "name": "metadata",     "type": "text",    "notNull": true, "default": "{}" },
+      { "name": "raw",          "type": "text",    "notNull": true, "default": "{}" },
+      { "name": "timestamp",    "type": "integer", "notNull": true, "default": "now" }
     ]
   },
   {
@@ -59,8 +69,8 @@
     "comment": "token_hash stores SHA-256 of the actual token — never the plain text. reuse_count detects stolen token families.",
     "columns": [
       { "name": "id",           "type": "integer", "primaryKey": true },
-      { "name": "client_db_id", "type": "integer", "notNull": true, "references": { "table": "oauth_clients", "column": "id", "onDelete": "CASCADE" } },
-      { "name": "user_id",      "type": "integer", "notNull": true, "references": { "table": "users",         "column": "id", "onDelete": "CASCADE" } },
+      { "name": "collector_id", "type": "integer", "notNull": true, "references": { "table": "collectors", "column": "id", "onDelete": "CASCADE" } },
+      { "name": "user_id",      "type": "integer", "notNull": true, "references": { "table": "users",      "column": "id", "onDelete": "CASCADE" } },
       { "name": "token_hash",   "type": "text",    "notNull": true, "unique": true },
       { "name": "issued_at",    "type": "integer", "notNull": true, "default": "now" },
       { "name": "expires_at",   "type": "integer", "notNull": true },

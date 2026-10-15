@@ -1,9 +1,11 @@
 'use strict';
 
 /* ── State ─────────────────────────────────────────────────────────────────── */
-let expandedRowId   = null;
-let autoRefreshId   = null;
-let tokenData       = [];
+let expandedRowId  = null;
+let autoRefreshId  = null;
+let collectorData  = [];
+let capabilities   = null;
+let snippetLang    = 'curl';
 
 const logState = {
   page: 1, limit: 50,
@@ -75,168 +77,470 @@ function showSection(name) {
   document.getElementById(`section-${name}`).classList.remove('hidden');
   document.querySelector(`.nav-link[data-section="${name}"]`).classList.add('active');
 
-  if (name === 'tokens') loadTokens();
-  if (name === 'logs')   { loadAppFilter(); loadLogs(); }
-  if (name === 'oauth')  loadOAuthClients();
+  if (name === 'logs')       { loadAppFilter(); loadLogs(); }
+  if (name === 'collectors') loadCollectors();
 }
 
-/* ── Token management ─────────────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════════════
+   COLLECTORS
+   ══════════════════════════════════════════════════════════════════════════ */
 
-async function loadTokens() {
-  const tbody = document.getElementById('token-list');
-  tbody.innerHTML = '<tr><td colspan="5" class="loading-cell">Loading…</td></tr>';
+/* ── Capabilities → form wiring ────────────────────────────────────────────── */
+
+async function loadCapabilities() {
+  if (capabilities) return capabilities;
+  capabilities = await apiFetch('GET', '/collectors/capabilities');
+  return capabilities;
+}
+
+function transferCap(value) {
+  return capabilities?.transferTypes.find(t => t.value === value) || null;
+}
+
+async function initCollectorForm() {
+  const caps = await loadCapabilities();
+  if (!caps) return;
+
+  const transferSel = document.getElementById('collector-transfer');
+  transferSel.innerHTML = caps.transferTypes
+    .map(t => `<option value="${escHtml(t.value)}">${escHtml(t.label)}</option>`)
+    .join('');
+
+  // Platform warning banner (Render does not route inbound UDP)
+  const note = document.getElementById('udp-platform-note');
+  if (caps.udp?.platform_no_ingress) {
+    note.innerHTML =
+      '<strong>Heads-up:</strong> this host does not route inbound UDP traffic. A UDP collector will bind ' +
+      'and the ingest pipeline works (verify with <em>Test</em>), but external datagrams will not arrive. ' +
+      'Run Logbase on Docker/a VPS, or use <code>tools/udp-forwarder</code> next to your log source.';
+    note.classList.remove('hidden');
+  } else if (caps.udp && !caps.udp.enabled) {
+    note.textContent = 'UDP ingestion is disabled on this server (UDP_ENABLED=false).';
+    note.classList.remove('hidden');
+  } else {
+    note.classList.add('hidden');
+  }
+
+  onTransferTypeChange();
+}
+
+function onTransferTypeChange() {
+  const value = document.getElementById('collector-transfer').value;
+  const cap   = transferCap(value);
+  if (!cap) return;
+
+  const authSel   = document.getElementById('collector-auth');
+  const formatSel = document.getElementById('collector-format');
+
+  authSel.innerHTML = cap.authMethods
+    .map(a => `<option value="${escHtml(a)}">${escHtml(capabilities.authMethods[a] || a)}</option>`)
+    .join('');
+
+  formatSel.innerHTML = cap.inputFormats
+    .map(f => `<option value="${escHtml(f)}">${escHtml(capabilities.inputFormats[f] || f)}</option>`)
+    .join('');
+
+  // Port + host inputs only apply to listener-based transports.
+  document.getElementById('fgroup-port').classList.toggle('hidden', !cap.requiresPort);
+  document.getElementById('fgroup-public-host').classList.toggle('hidden', !cap.requiresPort);
+
+  const hint = document.getElementById('transfer-hint');
+  let text = cap.description;
+  if (cap.requiresPort && capabilities.udp) {
+    const r = capabilities.udp.port_range;
+    text += ` Port must be between ${r.min} and ${r.max}.`;
+    text += ` At most ${cap.maxPerUser} per user; ${capabilities.udp.max_listeners} listener(s) may be active server-wide.`;
+    document.getElementById('collector-port').placeholder = String(r.min);
+  }
+  hint.textContent = text;
+}
+
+/* ── List + render ─────────────────────────────────────────────────────────── */
+
+async function loadCollectors() {
+  const tbody = document.getElementById('collector-list');
+  tbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Loading…</td></tr>';
   try {
-    tokenData = await apiFetch('GET', '/auth/tokens') || [];
-    renderTokens(tokenData);
-    populateSnippetSelect(tokenData);
+    await initCollectorForm();
+    collectorData = await apiFetch('GET', '/collectors') || [];
+    renderCollectors(collectorData);
+    populateSnippetSelect(collectorData);
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="5" class="error-cell">${escHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="error-cell">${escHtml(err.message)}</td></tr>`;
   }
 }
 
-function renderTokens(tokens) {
-  const tbody = document.getElementById('token-list');
-  if (!tokens.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-cell">No tokens yet. Create one above to start pushing logs.</td></tr>';
+function statusBadge(status) {
+  const map = {
+    listening:                     ['status-listening', 'Listening'],
+    listening_no_platform_ingress: ['status-warn',      'Bound (no platform ingress)'],
+    disabled:                      ['status-off',       'Disabled'],
+    disabled_by_config:            ['status-off',       'UDP disabled on server'],
+    capacity_exceeded:             ['status-warn',      'Listener slot taken'],
+    stopped:                       ['status-off',       'Stopped'],
+    'n/a':                         ['status-off',       '—'],
+  };
+  if (status && status.startsWith('bind_error')) {
+    return `<span class="status-badge status-error" title="${escHtml(status)}">Bind error</span>`;
+  }
+  const [cls, label] = map[status] || ['status-off', status || '—'];
+  return `<span class="status-badge ${cls}" title="${escHtml(status || '')}">${escHtml(label)}</span>`;
+}
+
+function renderCollectors(collectors) {
+  const tbody = document.getElementById('collector-list');
+  if (!collectors.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">No collectors yet. Create one above to start ingesting logs.</td></tr>';
     return;
   }
-  tbody.innerHTML = tokens.map(t => `
-    <tr>
-      <td>${escHtml(t.name)}</td>
-      <td><code>${escHtml(t.token_preview)}</code></td>
-      <td>${fmtDate(t.created_at * 1000)}</td>
-      <td>${t.last_used_at ? relTime(t.last_used_at * 1000) : '<span class="muted">Never</span>'}</td>
-      <td>
-        <button class="btn btn-danger btn-sm"
-          onclick="handleDeleteToken(${t.id}, '${escHtml(t.name)}')">Revoke</button>
-      </td>
-    </tr>
-  `).join('');
+
+  tbody.innerHTML = collectors.map(c => {
+    const cred = (c.credentials || [])[0];
+    const credLine = cred
+      ? (cred.token_preview
+          ? `<div class="muted" style="font-size:.78rem;margin-top:.2rem;"><code>${escHtml(cred.token_preview)}</code></div>`
+          : `<div class="muted" style="font-size:.78rem;margin-top:.2rem;"><code>${escHtml(cred.public_id || '')}</code></div>`)
+      : '';
+
+    const isUdp = c.transfer_type === 'udp';
+
+    return `
+      <tr>
+        <td>
+          ${escHtml(c.name)}
+          <div class="muted" style="font-size:.75rem;">${escHtml(fmtDate(c.created_at * 1000))}</div>
+        </td>
+        <td><span class="level-badge ${isUdp ? 'level-warn' : 'level-info'}">${escHtml(c.transfer_type)}</span></td>
+        <td>${escHtml(c.auth_method)}${credLine}</td>
+        <td><code>${escHtml(c.input_format)}</code></td>
+        <td><code>${escHtml(c.endpoint || '—')}</code></td>
+        <td>${statusBadge(c.listener_status)}</td>
+        <td>
+          ${Number(c.events_received).toLocaleString()}
+          ${c.last_event_at ? `<div class="muted" style="font-size:.75rem;">${escHtml(relTime(c.last_event_at * 1000))}</div>` : ''}
+        </td>
+        <td>
+          <div class="row-actions">
+            <label class="switch" title="${c.enabled ? 'Disable' : 'Enable'} collector">
+              <input type="checkbox" ${c.enabled ? 'checked' : ''}
+                     onchange="handleToggleCollector(${c.id}, this.checked, this)" />
+              <span class="slider"></span>
+            </label>
+            ${isUdp ? `<button class="btn btn-ghost btn-sm" onclick="handleTestCollector(${c.id})">Test</button>` : ''}
+            ${c.auth_method !== 'none' ? `<button class="btn btn-ghost btn-sm" onclick="handleRotateCollector(${c.id}, '${escHtml(c.name)}')">Rotate</button>` : ''}
+            <button class="btn btn-danger btn-sm" onclick="handleDeleteCollector(${c.id}, '${escHtml(c.name)}')">Delete</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
 }
 
-async function handleCreateToken(e) {
+/* ── Mutations ─────────────────────────────────────────────────────────────── */
+
+async function handleCreateCollector(e) {
   e.preventDefault();
-  const nameInput = document.getElementById('token-name');
-  const name      = nameInput.value.trim();
-  if (!name) return;
+
+  const payload = {
+    name:          document.getElementById('collector-name').value.trim(),
+    transfer_type: document.getElementById('collector-transfer').value,
+    auth_method:   document.getElementById('collector-auth').value,
+    input_format:  document.getElementById('collector-format').value,
+  };
+  if (!payload.name) return;
+
+  const cap = transferCap(payload.transfer_type);
+  if (cap?.requiresPort) {
+    payload.port        = parseInt(document.getElementById('collector-port').value, 10);
+    payload.public_host = document.getElementById('collector-public-host').value.trim() || undefined;
+    if (!Number.isInteger(payload.port)) {
+      showAlert('collector-alert', 'A port is required for this transfer type', 'error');
+      return;
+    }
+  }
 
   const btn = e.target.querySelector('button[type="submit"]');
   btn.disabled    = true;
   btn.textContent = 'Creating…';
 
   try {
-    const result = await apiFetch('POST', '/auth/tokens', { name });
-    nameInput.value = '';
-    showTokenModal(result.token, result.name);
-    await loadTokens();
+    const result = await apiFetch('POST', '/collectors', payload);
+    document.getElementById('collector-name').value        = '';
+    document.getElementById('collector-port').value        = '';
+    document.getElementById('collector-public-host').value = '';
+
+    if (result.secrets && Object.keys(result.secrets).length) {
+      showSecretModal(`Collector created: ${result.name}`, result.secrets);
+    } else {
+      showAlert('collector-alert', `Collector "${result.name}" created.`, 'success');
+    }
+    await loadCollectors();
   } catch (err) {
-    showAlert('token-alert', err.message, 'error');
+    showAlert('collector-alert', err.message, 'error');
   } finally {
     btn.disabled    = false;
-    btn.textContent = 'Create Token';
+    btn.textContent = 'Create Collector';
   }
 }
 
-async function handleDeleteToken(id, name) {
-  if (!confirm(`Revoke token "${name}"?\n\nAny apps using it will immediately lose access.`)) return;
+async function handleToggleCollector(id, enabled, inputEl) {
+  inputEl.disabled = true;
   try {
-    await apiFetch('DELETE', `/auth/tokens/${id}`);
-    await loadTokens();
+    await apiFetch('PATCH', `/collectors/${id}`, { enabled });
+    await loadCollectors();
   } catch (err) {
-    showAlert('token-alert', err.message, 'error');
+    inputEl.checked = !enabled;   // revert the switch — the change did not take
+    showAlert('collector-alert', err.message, 'error');
+    await loadCollectors();
+  } finally {
+    inputEl.disabled = false;
   }
 }
 
-/* ── Token modal ───────────────────────────────────────────────────────────── */
-
-function showTokenModal(token, name) {
-  document.getElementById('modal-token-name').textContent  = name;
-  document.getElementById('modal-token-value').textContent = token;
-  document.getElementById('token-modal').classList.remove('hidden');
+async function handleDeleteCollector(id, name) {
+  if (!confirm(`Delete collector "${name}"?\n\nIts credentials are revoked immediately and any listener is stopped.`)) return;
+  try {
+    await apiFetch('DELETE', `/collectors/${id}`);
+    await loadCollectors();
+  } catch (err) {
+    showAlert('collector-alert', err.message, 'error');
+  }
 }
 
-function closeTokenModal() {
-  document.getElementById('token-modal').classList.add('hidden');
+async function handleRotateCollector(id, name) {
+  if (!confirm(`Rotate credentials for "${name}"?\n\nThe current credentials stop working immediately.`)) return;
+  try {
+    const result = await apiFetch('POST', `/collectors/${id}/rotate`);
+    showSecretModal(`New credentials: ${name}`, result.secrets);
+    await loadCollectors();
+  } catch (err) {
+    showAlert('collector-alert', err.message, 'error');
+  }
 }
 
-function copyModalToken() {
-  const val = document.getElementById('modal-token-value').textContent;
-  navigator.clipboard.writeText(val).then(() => {
-    const btn = document.getElementById('copy-token-btn');
+async function handleTestCollector(id) {
+  try {
+    const result = await apiFetch('POST', `/collectors/${id}/test`);
+    showAlert('collector-alert', result.message, result.ok ? 'success' : 'error');
+    await loadCollectors();
+  } catch (err) {
+    showAlert('collector-alert', err.message, 'error');
+  }
+}
+
+/* ── Credentials modal ─────────────────────────────────────────────────────── */
+
+function showSecretModal(title, secrets) {
+  document.getElementById('secret-modal-title').textContent = title;
+  document.getElementById('secret-modal-body').innerHTML = Object.entries(secrets).map(([k, v]) => `
+    <div style="margin-bottom:.75rem;">
+      <div class="expand-label" style="margin-bottom:.3rem;">${escHtml(k)}</div>
+      <div class="token-display" data-secret="${escHtml(k)}">${escHtml(v)}</div>
+    </div>
+  `).join('');
+  document.getElementById('secret-modal').classList.remove('hidden');
+}
+
+function closeSecretModal() {
+  document.getElementById('secret-modal').classList.add('hidden');
+}
+
+function copySecrets() {
+  const text = [...document.querySelectorAll('#secret-modal-body .token-display')]
+    .map(el => `${el.dataset.secret}: ${el.textContent}`)
+    .join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copy-secret-btn');
     btn.textContent = 'Copied!';
     setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
   });
 }
 
-/* ── Integration snippet ───────────────────────────────────────────────────── */
+/* ── Integration snippets ──────────────────────────────────────────────────── */
 
-function populateSnippetSelect(tokens) {
-  const sel = document.getElementById('snippet-token-select');
+function populateSnippetSelect(collectors) {
+  const sel = document.getElementById('snippet-collector-select');
   if (!sel) return;
-  sel.innerHTML = '<option value="">— select a token —</option>' +
-    tokens.map(t => `<option value="${escHtml(t.name)}">${escHtml(t.name)}</option>`).join('');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— select a collector —</option>' +
+    collectors.map(c => `<option value="${c.id}">${escHtml(c.name)} (${escHtml(c.transfer_type)})</option>`).join('');
+  sel.value = prev;
   updateSnippet();
 }
 
-function updateSnippet() {
-  const sel    = document.getElementById('snippet-token-select');
-  const picked = sel?.value || '';
-  const token  = picked
-    ? `<YOUR_TOKEN_FOR_${picked.toUpperCase().replace(/[^A-Z0-9]/g, '_')}>`
-    : '<YOUR_API_TOKEN>';
-  const host   = window.location.origin;
+function snippetLanguagesFor(collector) {
+  if (!collector) return ['curl'];
+  return collector.transfer_type === 'udp'
+    ? ['netcat', 'node', 'python']
+    : ['curl', 'node', 'python'];
+}
 
-  const curl = `curl -X POST ${host}/logs \\
-  -H "X-API-Token: ${token}" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "app": "my-service",
-    "level": "error",
-    "message": "Something went wrong",
-    "metadata": { "userId": 42, "errorCode": 500 }
-  }'`;
+function sampleEvents(format) {
+  const a = { app: 'my-service', level: 'error', message: 'Something went wrong', userId: 42 };
+  const b = { app: 'my-service', level: 'info',  message: 'Recovered' };
+  return format === 'json_array'
+    ? JSON.stringify([a, b])
+    : `${JSON.stringify(a)}\n${JSON.stringify(b)}`;
+}
 
-  const node = `const res = await fetch('${host}/logs', {
+function buildSnippet(collector, lang) {
+  if (!collector) return 'Select a collector to see a ready-to-use example.';
+
+  const format  = collector.input_format;
+  const payload = sampleEvents(format);
+
+  /* ── UDP ─────────────────────────────────────────────────────────────── */
+  if (collector.transfer_type === 'udp') {
+    const [host, port] = String(collector.endpoint || '').split(':');
+    const note = `# UDP is unauthenticated: anything sent to ${host}:${port} is ingested into this collector.
+# There is no response and no delivery guarantee. Keep each batch inside one
+# datagram (~1472 bytes is the safe MTU limit; ${format === 'json_array'
+  ? 'an oversized JSON array arrives truncated and fails to parse'
+  : 'NDJSON degrades gracefully — only the clipped line is lost'}).`;
+
+    if (lang === 'netcat') {
+      return `${note}
+
+# Single batch
+printf '%s' '${payload.replace(/\n/g, '\\n')}' | nc -u -w1 ${host} ${port}
+
+# Or with socat
+echo '${payload.split('\n')[0]}' | socat - UDP-DATAGRAM:${host}:${port}`;
+    }
+
+    if (lang === 'node') {
+      return `${note}
+
+const dgram = require('dgram');
+const client = dgram.createSocket('udp4');
+
+const events = [
+  { app: 'my-service', level: 'error', message: 'Something went wrong', userId: 42 },
+  { app: 'my-service', level: 'info',  message: 'Recovered' }
+];
+
+const payload = ${format === 'json_array'
+  ? 'JSON.stringify(events)'
+  : "events.map(e => JSON.stringify(e)).join('\\n')"};
+
+client.send(Buffer.from(payload), ${port}, '${host}', (err) => {
+  if (err) console.error(err);
+  client.close();
+});`;
+    }
+
+    return `${note}
+
+import json
+import socket
+
+events = [
+    {'app': 'my-service', 'level': 'error', 'message': 'Something went wrong', 'userId': 42},
+    {'app': 'my-service', 'level': 'info',  'message': 'Recovered'},
+]
+
+payload = ${format === 'json_array'
+  ? 'json.dumps(events)'
+  : "'\\n'.join(json.dumps(e) for e in events)"}
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.sendto(payload.encode(), ('${host}', ${port}))
+sock.close()`;
+  }
+
+  /* ── HTTP ────────────────────────────────────────────────────────────── */
+  const url         = collector.endpoint;
+  const contentType = format === 'ndjson' ? 'application/x-ndjson' : 'application/json';
+  const isOAuth     = collector.auth_method === 'oauth_client_credentials';
+  const authHeader  = isOAuth
+    ? 'Authorization: Bearer <ACCESS_TOKEN>'
+    : 'X-API-Token: <YOUR_API_TOKEN>';
+
+  if (lang === 'curl') {
+    const oauthStep = isOAuth ? `# Step 1 — exchange client credentials for an access token (valid 1 hour)
+curl -X POST ${window.location.origin}/oauth/token \\
+  -H "Content-Type: application/x-www-form-urlencoded" \\
+  -d "grant_type=client_credentials&client_id=<CLIENT_ID>&client_secret=<CLIENT_SECRET>"
+
+# Step 2 — push a batch
+` : '';
+
+    return `${oauthStep}curl -X POST ${url} \\
+  -H "${authHeader}" \\
+  -H "Content-Type: ${contentType}" \\
+  --data-binary '${payload}'
+
+# Response: { "ok": true, "inserted": 2, "rejected": 0 }
+# This collector expects "${format}"${format === 'json_array'
+  ? ' — send a JSON array; each element is one event.'
+  : ' — send one JSON object per line.'}`;
+  }
+
+  if (lang === 'node') {
+    return `const events = [
+  { app: 'my-service', level: 'error', message: 'Something went wrong', userId: 42 },
+  { app: 'my-service', level: 'info',  message: 'Recovered' }
+];
+
+const body = ${format === 'json_array'
+  ? 'JSON.stringify(events)'
+  : "events.map(e => JSON.stringify(e)).join('\\n')"};
+
+const res = await fetch('${url}', {
   method: 'POST',
   headers: {
-    'X-API-Token': '${token}',
-    'Content-Type': 'application/json'
+    '${authHeader.split(':')[0]}': '${authHeader.split(': ')[1]}',
+    'Content-Type': '${contentType}'
   },
-  body: JSON.stringify({
-    app:     'my-service',
-    level:   'error',
-    message: 'Something went wrong',
-    metadata: { userId: 42, errorCode: 500 }
-  })
+  body
 });
-const data = await res.json();   // { ok: true }`;
+const data = await res.json();   // { ok: true, inserted: 2, rejected: 0 }`;
+  }
 
-  const python = `import requests
+  return `import json
+import requests
+
+events = [
+    {'app': 'my-service', 'level': 'error', 'message': 'Something went wrong', 'userId': 42},
+    {'app': 'my-service', 'level': 'info',  'message': 'Recovered'},
+]
+
+body = ${format === 'json_array'
+  ? 'json.dumps(events)'
+  : "'\\n'.join(json.dumps(e) for e in events)"}
 
 response = requests.post(
-    '${host}/logs',
-    headers={'X-API-Token': '${token}'},
-    json={
-        'app':     'my-service',
-        'level':   'warning',
-        'message': 'Low disk space',
-        'metadata': {'disk': '85%', 'host': 'prod-1'}
-    }
-)`;
-
-  document.querySelector('#snippet-curl pre').textContent   = curl;
-  document.querySelector('#snippet-node pre').textContent   = node;
-  document.querySelector('#snippet-python pre').textContent = python;
+    '${url}',
+    headers={
+        '${authHeader.split(':')[0]}': '${authHeader.split(': ')[1]}',
+        'Content-Type': '${contentType}',
+    },
+    data=body,
+)
+print(response.json())   # { 'ok': True, 'inserted': 2, 'rejected': 0 }`;
 }
 
-function showSnippetTab(lang) {
-  document.querySelectorAll('.snippet-pane').forEach(p => p.classList.add('hidden'));
-  document.querySelectorAll('.snippet-tab').forEach(t => t.classList.remove('active'));
-  document.getElementById(`snippet-${lang}`).classList.remove('hidden');
-  document.querySelector(`.snippet-tab[data-lang="${lang}"]`).classList.add('active');
+function updateSnippet() {
+  const sel       = document.getElementById('snippet-collector-select');
+  const collector = collectorData.find(c => String(c.id) === sel?.value) || null;
+  const langs     = snippetLanguagesFor(collector);
+
+  if (!langs.includes(snippetLang)) snippetLang = langs[0];
+
+  document.getElementById('snippet-tabs').innerHTML = langs.map(l =>
+    `<button class="snippet-tab${l === snippetLang ? ' active' : ''}" data-lang="${l}">${escHtml(l)}</button>`
+  ).join('');
+
+  document.querySelectorAll('#snippet-tabs .snippet-tab').forEach(t => {
+    t.addEventListener('click', () => { snippetLang = t.dataset.lang; updateSnippet(); });
+  });
+
+  document.querySelector('#snippet-pane pre').textContent = buildSnippet(collector, snippetLang);
 }
 
-/* ── Logs ──────────────────────────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════════════
+   LOGS
+   ══════════════════════════════════════════════════════════════════════════ */
 
 async function loadAppFilter() {
   try {
@@ -298,19 +602,27 @@ function renderLogs(logs) {
   }
 
   tbody.innerHTML = logs.map(log => {
-    const fullEntry = { timestamp: new Date(log.timestamp).toISOString(),
-      app: log.app_name, level: log.level, message: log.message, ...log.metadata };
+    const fullEntry = {
+      timestamp: new Date(log.timestamp).toISOString(),
+      app: log.app_name, level: log.level, message: log.message,
+      collector: log.collector_name || null,
+      transfer:  log.transfer_type  || null,
+      ...log.metadata
+    };
     const jsonStr = JSON.stringify(fullEntry, null, 2);
     const preview = log.message.length > 120
       ? log.message.slice(0, 120) + '…'
       : log.message;
+    const via = log.collector_name
+      ? `<div class="muted" style="font-size:.72rem;">via ${escHtml(log.collector_name)}</div>`
+      : '';
 
     return `
       <tr class="log-row" data-id="${log.id}" onclick="toggleExpand(${log.id}, this)">
         <td class="col-time" title="${escHtml(fmtDate(log.timestamp))}">
           ${escHtml(relTime(log.timestamp))}
         </td>
-        <td class="col-app">${escHtml(log.app_name)}</td>
+        <td class="col-app">${escHtml(log.app_name)}${via}</td>
         <td class="col-level">
           <span class="level-badge ${levelClass(log.level)}">${escHtml(log.level)}</span>
         </td>
@@ -449,281 +761,7 @@ function showAlert(containerId, message, type = 'error') {
   el.textContent = message;
   el.className   = `alert alert-${type}`;
   el.classList.remove('hidden');
-  setTimeout(() => el.classList.add('hidden'), 6000);
-}
-
-/* ── OAuth Client management ───────────────────────────────────────────────── */
-
-let oauthClientData = [];
-
-async function loadOAuthClients() {
-  const tbody = document.getElementById('oauth-client-list');
-  tbody.innerHTML = '<tr><td colspan="4" class="loading-cell">Loading…</td></tr>';
-  try {
-    oauthClientData = await apiFetch('GET', '/oauth/clients') || [];
-    renderOAuthClients(oauthClientData);
-    populateOAuthSnippetSelect(oauthClientData);
-  } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="4" class="error-cell">${escHtml(err.message)}</td></tr>`;
-  }
-}
-
-function renderOAuthClients(clients) {
-  const tbody = document.getElementById('oauth-client-list');
-  if (!clients.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-cell">No OAuth clients yet. Create one above.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = clients.map(c => `
-    <tr>
-      <td>${escHtml(c.name)}</td>
-      <td><code>${escHtml(c.client_id)}</code></td>
-      <td>${fmtDate(c.created_at * 1000)}</td>
-      <td>
-        <button class="btn btn-danger btn-sm"
-          onclick="handleDeleteOAuthClient(${c.id}, '${escHtml(c.name)}')">Revoke</button>
-      </td>
-    </tr>
-  `).join('');
-}
-
-async function handleCreateOAuthClient(e) {
-  e.preventDefault();
-  const nameInput = document.getElementById('oauth-client-name');
-  const name      = nameInput.value.trim();
-  if (!name) return;
-
-  const btn = e.target.querySelector('button[type="submit"]');
-  btn.disabled    = true;
-  btn.textContent = 'Creating…';
-
-  try {
-    const result = await apiFetch('POST', '/oauth/clients', { name });
-    nameInput.value = '';
-    showOAuthModal(result.name, result.client_id, result.client_secret);
-    await loadOAuthClients();
-  } catch (err) {
-    showAlert('oauth-alert', err.message, 'error');
-  } finally {
-    btn.disabled    = false;
-    btn.textContent = 'Create OAuth Client';
-  }
-}
-
-async function handleDeleteOAuthClient(id, name) {
-  if (!confirm(`Revoke OAuth client "${name}"?\n\nAny apps using it will immediately lose access.`)) return;
-  try {
-    await apiFetch('DELETE', `/oauth/clients/${id}`);
-    await loadOAuthClients();
-  } catch (err) {
-    showAlert('oauth-alert', err.message, 'error');
-  }
-}
-
-/* ── OAuth modal ───────────────────────────────────────────────────────────── */
-
-function showOAuthModal(name, clientId, clientSecret) {
-  document.getElementById('oauth-modal-name').textContent          = name;
-  document.getElementById('oauth-modal-client-id').textContent     = clientId;
-  document.getElementById('oauth-modal-client-secret').textContent = clientSecret;
-  document.getElementById('oauth-modal').classList.remove('hidden');
-}
-
-function closeOAuthModal() {
-  document.getElementById('oauth-modal').classList.add('hidden');
-}
-
-function copyOAuthCredentials() {
-  const id  = document.getElementById('oauth-modal-client-id').textContent;
-  const sec = document.getElementById('oauth-modal-client-secret').textContent;
-  navigator.clipboard.writeText(`client_id:     ${id}\nclient_secret: ${sec}`).then(() => {
-    const btn = document.querySelector('#oauth-modal .modal-actions .btn-ghost');
-    btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = 'Copy both'; }, 2000);
-  });
-}
-
-/* ── OAuth Integration snippet ─────────────────────────────────────────────── */
-
-function populateOAuthSnippetSelect(clients) {
-  const sel = document.getElementById('oauth-snippet-client-select');
-  if (!sel) return;
-  sel.innerHTML = '<option value="">— select a client —</option>' +
-    clients.map(c => `<option value="${escHtml(c.client_id)}" data-name="${escHtml(c.name)}">${escHtml(c.name)}</option>`).join('');
-  updateOAuthSnippet();
-}
-
-function updateOAuthSnippet() {
-  const sel      = document.getElementById('oauth-snippet-client-select');
-  const clientId = sel?.value || '<YOUR_CLIENT_ID>';
-  const secret   = '<YOUR_CLIENT_SECRET>';
-  const host     = window.location.origin;
-
-  const curl = `# Step 1: Exchange client credentials for an access token + refresh token
-curl -X POST ${host}/oauth/token \\
-  -H "Content-Type: application/x-www-form-urlencoded" \\
-  -d "grant_type=client_credentials&client_id=${clientId}&client_secret=${secret}"
-
-# Response:
-# {
-#   "access_token":  "eyJ...",   <-- valid for 1 hour
-#   "token_type":    "Bearer",
-#   "expires_in":    3600,
-#   "refresh_token": "a3f9...",  <-- valid for 30 days
-#   "scope":         "logs:write"
-# }
-
-# Step 2: Push logs using the access token
-curl -X POST ${host}/logs \\
-  -H "Authorization: Bearer <access_token>" \\
-  -H "Content-Type: application/json" \\
-  -d '{"app":"my-service","level":"error","message":"Something failed"}'
-
-# Step 3: When access token expires, use the refresh token to get a new pair
-#         (no need to send client_secret again)
-curl -X POST ${host}/oauth/token \\
-  -H "Content-Type: application/x-www-form-urlencoded" \\
-  -d "grant_type=refresh_token&refresh_token=<refresh_token>"
-# Returns a new access_token + a new refresh_token (old one is revoked)
-
-# Step 4: Explicitly revoke a refresh token when no longer needed
-curl -X POST ${host}/oauth/revoke \\
-  -H "Content-Type: application/x-www-form-urlencoded" \\
-  -d "token=<refresh_token>"`;
-
-  const node = `// Token manager — handles automatic refresh
-class OAuthClient {
-  constructor() {
-    this.clientId     = '${clientId}';
-    this.clientSecret = '${secret}';
-    this.accessToken  = null;
-    this.refreshToken = null;
-    this.expiresAt    = 0;
-  }
-
-  async getToken() {
-    if (this.accessToken && Date.now() < this.expiresAt - 30_000) {
-      return this.accessToken; // still valid (with 30s buffer)
-    }
-    if (this.refreshToken) {
-      return this._refresh();  // use refresh token — no secret needed
-    }
-    return this._initialGrant(); // first time — use client credentials
-  }
-
-  async _initialGrant() {
-    const res  = await fetch('${host}/oauth/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type:    'client_credentials',
-        client_id:     this.clientId,
-        client_secret: this.clientSecret
-      })
-    });
-    return this._store(await res.json());
-  }
-
-  async _refresh() {
-    const res = await fetch('${host}/oauth/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type:    'refresh_token',
-        refresh_token: this.refreshToken
-      })
-    });
-    const data = await res.json();
-    if (data.error === 'invalid_grant') {
-      this.refreshToken = null; // expired — fall back to client credentials
-      return this._initialGrant();
-    }
-    return this._store(data);
-  }
-
-  _store({ access_token, refresh_token, expires_in }) {
-    this.accessToken  = access_token;
-    this.refreshToken = refresh_token;
-    this.expiresAt    = Date.now() + expires_in * 1000;
-    return access_token;
-  }
-}
-
-const oauth = new OAuthClient();
-
-// Push a log — token is refreshed automatically
-const token = await oauth.getToken();
-await fetch('${host}/logs', {
-  method: 'POST',
-  headers: { 'Authorization': \`Bearer \${token}\`, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ app: 'my-service', level: 'info', message: 'Deploy complete' })
-});`;
-
-  const python = `import time
-import requests
-
-HOST = '${host}'
-
-class OAuthClient:
-    def __init__(self, client_id, client_secret):
-        self.client_id     = client_id
-        self.client_secret = client_secret
-        self.access_token  = None
-        self.refresh_token = None
-        self.expires_at    = 0
-
-    def get_token(self):
-        if self.access_token and time.time() < self.expires_at - 30:
-            return self.access_token   # still valid (30s buffer)
-        if self.refresh_token:
-            return self._refresh()     # use refresh token
-        return self._initial_grant()   # first time
-
-    def _initial_grant(self):
-        r = requests.post(f'{HOST}/oauth/token', data={
-            'grant_type':    'client_credentials',
-            'client_id':     self.client_id,
-            'client_secret': self.client_secret
-        })
-        return self._store(r.json())
-
-    def _refresh(self):
-        r = requests.post(f'{HOST}/oauth/token', data={
-            'grant_type':    'refresh_token',
-            'refresh_token': self.refresh_token
-        })
-        data = r.json()
-        if data.get('error') == 'invalid_grant':
-            self.refresh_token = None
-            return self._initial_grant()
-        return self._store(data)
-
-    def _store(self, data):
-        self.access_token  = data['access_token']
-        self.refresh_token = data.get('refresh_token')
-        self.expires_at    = time.time() + data['expires_in']
-        return self.access_token
-
-
-client = OAuthClient('${clientId}', '${secret}')
-
-# Push a log — token is refreshed automatically
-token = client.get_token()
-requests.post(f'{HOST}/logs',
-    headers={'Authorization': f'Bearer {token}'},
-    json={'app': 'my-service', 'level': 'warning', 'message': 'High CPU'}
-)`;
-
-  document.querySelector('#oauth-snippet-curl pre').textContent   = curl;
-  document.querySelector('#oauth-snippet-node pre').textContent   = node;
-  document.querySelector('#oauth-snippet-python pre').textContent = python;
-}
-
-function showOAuthSnippetTab(lang) {
-  document.querySelectorAll('#section-oauth .snippet-pane').forEach(p => p.classList.add('hidden'));
-  document.querySelectorAll('.oauth-snippet-tab').forEach(t => t.classList.remove('active'));
-  document.getElementById(`oauth-snippet-${lang}`).classList.remove('hidden');
-  document.querySelector(`.oauth-snippet-tab[data-lang="${lang}"]`).classList.add('active');
+  setTimeout(() => el.classList.add('hidden'), 8000);
 }
 
 /* ── Init ──────────────────────────────────────────────────────────────────── */
@@ -741,28 +779,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // Logout
   document.getElementById('logout-btn').addEventListener('click', logout);
 
-  // Token form
-  document.getElementById('token-form').addEventListener('submit', handleCreateToken);
+  // Collector form
+  document.getElementById('collector-form').addEventListener('submit', handleCreateCollector);
+  document.getElementById('collector-transfer').addEventListener('change', onTransferTypeChange);
+  document.getElementById('snippet-collector-select').addEventListener('change', updateSnippet);
 
-  // OAuth form
-  document.getElementById('oauth-form').addEventListener('submit', handleCreateOAuthClient);
-
-  // Close OAuth modal on overlay click
-  document.getElementById('oauth-modal').addEventListener('click', (e) => {
-    if (e.target === e.currentTarget) closeOAuthModal();
-  });
-
-  // OAuth snippet tabs
-  document.querySelectorAll('.oauth-snippet-tab').forEach(t => {
-    t.addEventListener('click', () => showOAuthSnippetTab(t.dataset.lang));
-  });
-
-  // OAuth snippet client selector
-  document.getElementById('oauth-snippet-client-select').addEventListener('change', updateOAuthSnippet);
-
-  // Close modal on overlay click
-  document.getElementById('token-modal').addEventListener('click', (e) => {
-    if (e.target === e.currentTarget) closeTokenModal();
+  // Close credentials modal on overlay click
+  document.getElementById('secret-modal').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeSecretModal();
   });
 
   // Search (debounced)
@@ -777,14 +801,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Clear filters
   document.getElementById('clear-filters-btn').addEventListener('click', clearFilters);
-
-  // Snippet tabs
-  document.querySelectorAll('.snippet-tab').forEach(t => {
-    t.addEventListener('click', () => showSnippetTab(t.dataset.lang));
-  });
-
-  // Snippet token selector
-  document.getElementById('snippet-token-select').addEventListener('change', updateSnippet);
 
   // Start on logs section
   showSection('logs');

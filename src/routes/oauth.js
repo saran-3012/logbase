@@ -4,10 +4,9 @@ const bcrypt         = require('bcryptjs');
 const crypto         = require('crypto');
 const jwt            = require('jsonwebtoken');
 const db             = require('../db/database');
-const sessionAuth    = require('../middleware/sessionAuth');
 const {
-  SelectQuery, InsertQuery, UpdateQuery, DeleteQuery,
-  eq, and, rawExpr,
+  SelectQuery, InsertQuery, UpdateQuery,
+  eq, and, col, aliasExpr, inner, on, rawExpr,
 } = require('../db/query');
 
 const router = express.Router();
@@ -25,15 +24,43 @@ function sha256(text) {
 }
 
 /**
- * Issue an access token (JWT) + a refresh token for the given client.
+ * Load the OAuth credential + its owning collector by client_id.
+ * Returns a flat object or null.
+ */
+async function findOAuthCollector(clientId) {
+  return db.query(
+    new SelectQuery('collector_credentials', 'cc')
+      .columns([
+        aliasExpr(col('cc.id'),           'credential_id'),
+        aliasExpr(col('cc.public_id'),    'client_id'),
+        aliasExpr(col('cc.secret_hash'),  'secret_hash'),
+        aliasExpr(col('c.id'),            'collector_id'),
+        aliasExpr(col('c.user_id'),       'user_id'),
+        aliasExpr(col('c.name'),          'name'),
+        aliasExpr(col('c.enabled'),       'enabled'),
+        aliasExpr(col('c.transfer_type'), 'transfer_type'),
+      ])
+      .join(inner('collectors', on('c.id', 'cc.collector_id'), 'c'))
+      .where(and(eq('cc.public_id', String(clientId)), eq('cc.kind', 'oauth_client')))
+      .single()
+  );
+}
+
+/**
+ * Issue an access token (JWT) + a refresh token for the given collector.
  * Stores the hashed refresh token via the provided db context (main db or
  * a transaction context) and returns the plain-text pair.
- * @param {object} client  - oauth_clients row
- * @param {object} [ctx]   - db context; defaults to the main db adapter
+ * @param {object} entry  - row from findOAuthCollector()
+ * @param {object} [ctx]  - db context; defaults to the main db adapter
  */
-async function issueTokenPair(client, ctx = db) {
+async function issueTokenPair(entry, ctx = db) {
   const accessToken = jwt.sign(
-    { sub: client.user_id, type: 'oauth', clientId: client.client_id, clientDbId: client.id },
+    {
+      sub:         entry.user_id,
+      type:        'oauth',
+      clientId:    entry.client_id,
+      collectorId: Number(entry.collector_id),
+    },
     process.env.JWT_SECRET,
     { expiresIn: ACCESS_TOKEN_TTL }
   );
@@ -44,7 +71,12 @@ async function issueTokenPair(client, ctx = db) {
 
   await ctx.query(
     new InsertQuery('oauth_refresh_tokens')
-      .values({ client_db_id: client.id, user_id: client.user_id, token_hash: refreshTokenHash, expires_at: expiresAt })
+      .values({
+        collector_id: Number(entry.collector_id),
+        user_id:      entry.user_id,
+        token_hash:   refreshTokenHash,
+        expires_at:   expiresAt,
+      })
   );
 
   return { accessToken, refreshToken, expiresAt };
@@ -93,21 +125,26 @@ router.post('/token', wrap(async (req, res) => {
       });
     }
 
-    const client = await db.query(
-      new SelectQuery('oauth_clients').where(eq('client_id', String(clientId))).single()
-    );
+    const entry = await findOAuthCollector(clientId);
 
-    const hash  = client ? client.client_secret_hash : '$2a$12$invalidhashfortimingnormalization';
+    const hash  = entry ? entry.secret_hash : '$2a$12$invalidhashfortimingnormalization';
     const match = bcrypt.compareSync(String(clientSecret), hash);
 
-    if (!client || !match) {
+    if (!entry || !match) {
       return res.status(401).json({
         error:             'invalid_client',
         error_description: 'Invalid client_id or client_secret'
       });
     }
 
-    const { accessToken, refreshToken } = await issueTokenPair(client);
+    if (!Number(entry.enabled)) {
+      return res.status(403).json({
+        error:             'invalid_client',
+        error_description: `Collector "${entry.name}" is disabled`
+      });
+    }
+
+    const { accessToken, refreshToken } = await issueTokenPair(entry);
 
     return res.json({
       access_token:  accessToken,
@@ -144,11 +181,11 @@ router.post('/token', wrap(async (req, res) => {
 
     // Detect replay of an already-rotated token — possible theft
     if (row.revoked) {
-      // Revoke all active refresh tokens for this client as a precaution
+      // Revoke all active refresh tokens for this collector as a precaution
       await db.query(
-        new UpdateQuery('oauth_refresh_tokens').set({ revoked: 1 }).where(eq('client_db_id', row.client_db_id))
+        new UpdateQuery('oauth_refresh_tokens').set({ revoked: 1 }).where(eq('collector_id', row.collector_id))
       );
-      console.warn(`[oauth] Stolen refresh token reuse detected for client_db_id=${row.client_db_id}. All tokens revoked.`);
+      console.warn(`[oauth] Stolen refresh token reuse detected for collector_id=${row.collector_id}. All tokens revoked.`);
       return res.status(401).json({
         error:             'invalid_grant',
         error_description: 'Refresh token has already been used. All tokens for this client have been revoked due to possible theft.'
@@ -163,13 +200,29 @@ router.post('/token', wrap(async (req, res) => {
       });
     }
 
-    const client = await db.query(
-      new SelectQuery('oauth_clients').where(eq('id', row.client_db_id)).single()
+    const credential = await db.query(
+      new SelectQuery('collector_credentials', 'cc')
+        .columns([
+          aliasExpr(col('cc.public_id'),    'client_id'),
+          aliasExpr(col('c.id'),            'collector_id'),
+          aliasExpr(col('c.user_id'),       'user_id'),
+          aliasExpr(col('c.name'),          'name'),
+          aliasExpr(col('c.enabled'),       'enabled'),
+        ])
+        .join(inner('collectors', on('c.id', 'cc.collector_id'), 'c'))
+        .where(and(eq('cc.collector_id', row.collector_id), eq('cc.kind', 'oauth_client')))
+        .single()
     );
-    if (!client) {
+    if (!credential) {
       return res.status(401).json({
         error:             'invalid_client',
         error_description: 'OAuth client no longer exists'
+      });
+    }
+    if (!Number(credential.enabled)) {
+      return res.status(403).json({
+        error:             'invalid_client',
+        error_description: `Collector "${credential.name}" is disabled`
       });
     }
 
@@ -180,7 +233,7 @@ router.post('/token', wrap(async (req, res) => {
           .set({ revoked: 1, reuse_count: rawExpr('reuse_count + 1') })
           .where(eq('id', row.id))
       );
-      return issueTokenPair(client, ctx);
+      return issueTokenPair(credential, ctx);
     });
 
     return res.json({
@@ -212,65 +265,12 @@ router.post('/revoke', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-/* ── POST /oauth/clients ────────────────────────────────────────────────────── */
-router.post('/clients', sessionAuth, wrap(async (req, res) => {
-  const { name } = req.body || {};
-  if (!name || typeof name !== 'string' || !name.trim()) {
-    return res.status(400).json({ error: 'name is required' });
-  }
-
-  const clientId     = crypto.randomUUID();
-  const clientSecret = crypto.randomBytes(32).toString('hex');
-  const secretHash   = bcrypt.hashSync(clientSecret, 12);
-
-  try {
-    const result = await db.query(
-      new InsertQuery('oauth_clients')
-        .values({ user_id: req.user.userId, name: name.trim(), client_id: clientId, client_secret_hash: secretHash })
-    );
-    // client_secret is returned ONLY at creation time — it is never stored in plain text
-    res.status(201).json({
-      id:            result.lastInsertRowid,
-      name:          name.trim(),
-      client_id:     clientId,
-      client_secret: clientSecret
-    });
-  } catch (err) {
-    if (err.message && err.message.includes('UNIQUE')) {
-      return res.status(409).json({ error: 'An OAuth client with that name already exists' });
-    }
-    throw err;
-  }
-}));
-
-/* ── GET /oauth/clients ─────────────────────────────────────────────────────── */
-router.get('/clients', sessionAuth, wrap(async (req, res) => {
-  const clients = await db.query(
-    new SelectQuery('oauth_clients')
-      .columns(['id', 'name', 'client_id', 'created_at'])
-      .where(eq('user_id', req.user.userId))
-      .orderBy('created_at', 'DESC')
-  );
-  res.json(clients);
-}));
-
-/* ── DELETE /oauth/clients/:id ──────────────────────────────────────────────── */
-router.delete('/clients/:id', sessionAuth, wrap(async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (!Number.isInteger(id)) {
-    return res.status(400).json({ error: 'Invalid client id' });
-  }
-
-  const result = await db.query(
-    new DeleteQuery('oauth_clients')
-      .where(eq('id', id))
-      .where(eq('user_id', req.user.userId))
-  );
-
-  if (result.changes === 0) {
-    return res.status(404).json({ error: 'OAuth client not found' });
-  }
-  res.json({ message: 'OAuth client revoked' });
-}));
+/*
+ * OAuth client management moved to /collectors.
+ * A client is now an HTTP collector with auth_method='oauth_client_credentials':
+ *   POST   /collectors            { transfer_type: 'http', auth_method: 'oauth_client_credentials', … }
+ *   POST   /collectors/:id/rotate — issues a new client_id + client_secret
+ *   DELETE /collectors/:id        — cascades to credentials and refresh tokens
+ */
 
 module.exports = router;

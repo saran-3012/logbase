@@ -1,0 +1,60 @@
+# Render blueprint for Logbase.
+#
+# IMPORTANT — UDP on Render:
+#   Render web services route HTTP(S) to a single port only. Inbound UDP is not
+#   routed on any service type. A UDP collector created here will bind inside
+#   the container and the full parse → store pipeline works (verify with
+#   POST /collectors/:id/test), but external datagrams will never arrive.
+#
+#   For real UDP ingestion either:
+#     a) deploy with docker-compose / on a VPS where UDP ports are reachable, or
+#     b) run tools/udp-forwarder next to your log source — it accepts UDP
+#        locally and forwards over HTTPS to an HTTP collector here.
+
+services:
+  - type: web
+    name: logbase
+    runtime: node
+    plan: starter
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: LOG_RETENTION_HOURS
+        value: "24"
+      - key: OAUTH_ACCESS_TOKEN_TTL
+        value: "3600"
+      - key: OAUTH_REFRESH_TOKEN_TTL
+        value: "2592000"
+      - key: DB_ADAPTER
+        value: libsql
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+
+      # ── Ingestion ──────────────────────────────────────────────────────────
+      - key: INGEST_BODY_LIMIT
+        value: 10mb
+      - key: MAX_BATCH_SIZE
+        value: "1000"
+
+      # ── UDP listener ───────────────────────────────────────────────────────
+      # Kept enabled so collectors can be configured and self-tested; see the
+      # ingress caveat at the top of this file.
+      - key: UDP_ENABLED
+        value: "true"
+      - key: UDP_BIND_HOST
+        value: 0.0.0.0
+      - key: UDP_PORT_RANGE
+        value: 10000-10010
+      - key: UDP_MAX_LISTENERS
+        value: "1"
+      - key: UDP_QUEUE_SIZE
+        value: "5000"

@@ -9,7 +9,7 @@ A self-hosted log ingestion and monitoring server with a web UI, full-text searc
 - **Batch ingestion** — `json_array` (each array element is one event) or `ndjson` (each line is one event), up to 1000 events per batch
 - **UDP listener** — dedicated-port, unauthenticated datagram ingestion with backpressure, micro-batched writes, and a loopback self-test
 - **Full-text search** — SQLite FTS5 across `app`, `level`, `message`, and all metadata fields
-- **Log viewer** — filterable table with expandable rows, relative timestamps, level badges, auto-refresh, and the originating collector per row
+- **Logs explorer** — level pills with live counts, a stacked event-volume histogram, time-range presets, app/collector filters, an event detail pane with the raw JSON, live tail, and NDJSON export
 - **24-hour retention** — configurable automatic purge
 - **OAuth 2.0** — Client Credentials grant with refresh token rotation and stolen-token detection
 - **API tokens** — simple static tokens for lightweight integrations
@@ -232,7 +232,11 @@ logbase/
 │       ├── collectors.js            # Collector CRUD, enable/disable, rotate, test
 │       ├── logs.js                  # Ingestion and retrieval
 │       └── oauth.js                 # Token issuance + rotation
-├── public/                          # Login page, dashboard, client JS
+├── public/
+│   ├── index.html                   # Sign in / create account
+│   ├── dashboard.html               # Logs explorer, collectors, new-collector wizard
+│   ├── css/app.css                  # Design tokens + all component styles
+│   └── js/{auth,dashboard}.js       # Client logic (no build step, no framework)
 ├── scripts/db-reset.js              # Destructive schema reset
 ├── tools/udp-forwarder/             # UDP → HTTP relay for UDP-less platforms
 ├── render.yaml                      # Render blueprint
@@ -371,12 +375,33 @@ requests.post('http://localhost:3000/logs',
 |---|---|
 | `search` | Full-text search across app, level, message, and all metadata |
 | `app` | Filter by exact app name |
-| `level` | Filter by log level |
+| `level` | One level (`error`) or several (`error,warn`) — the dashboard's level pills are multi-select |
 | `collector` | Filter by collector id |
 | `from` | Start timestamp (date string or ms epoch) |
 | `to` | End timestamp |
 | `page` | Page number (default: 1) |
 | `limit` | Results per page (default: 50, max: 200) |
+
+Each row includes `collector_id`, `collector_name`, `transfer_type`, parsed
+`metadata`, and the original `raw` event (used by the detail pane).
+
+### `GET /logs/stats`
+
+Aggregates powering the dashboard's level pills and volume histogram. Accepts
+**exactly the same filters** as `GET /logs`, plus `buckets` (12–120, default 60).
+
+```json
+{
+  "levels": { "error": 7, "warn": 19, "info": 212, "debug": 31, "trace": 0 },
+  "total": 269,
+  "range": { "from": 1760000000000, "to": 1760003600000, "bucket_ms": 60000 },
+  "buckets": [ { "from": 1760000000000, "to": 1760000060000, "total": 3, "levels": { "error": 1, "info": 2 } } ]
+}
+```
+
+> The `levels` breakdown deliberately **ignores** the `level` filter so the pills
+> keep showing how many events each level has, including ones currently filtered
+> out. Everything else (search, app, collector, time range) is applied.
 
 ---
 

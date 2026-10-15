@@ -3,648 +3,431 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Logbase — Dashboard</title>
+  <title>Logbase</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :root {
-      --bg:          #0f172a;
-      --surface:     #1e293b;
-      --surface2:    #263148;
-      --border:      #334155;
-      --text:        #f1f5f9;
-      --muted:       #94a3b8;
-      --accent:      #6366f1;
-      --accent-dim:  #4f46e5;
-      --error:       #ef4444;
-      --warn:        #f59e0b;
-      --info:        #3b82f6;
-      --success:     #22c55e;
-      --debug:       #6b7280;
-      --trace:       #9ca3af;
-    }
-
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      min-height: 100vh;
-    }
-
-    /* ── Navbar ─────────────────────────────────────────────────────────── */
-    .navbar {
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      padding: 0 1.5rem;
-      height: 56px;
-      gap: 1.5rem;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }
-    .nav-brand {
-      font-size: 1rem;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      gap: .5rem;
-      color: var(--text);
-      text-decoration: none;
-      margin-right: .5rem;
-    }
-    .nav-brand span { color: var(--accent); font-size: 1.2rem; }
-    .nav-links { display: flex; gap: .25rem; flex: 1; }
-    .nav-link {
-      padding: .4rem .85rem;
-      border: none;
-      background: transparent;
-      color: var(--muted);
-      border-radius: 6px;
-      font-size: .9rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background .15s, color .15s;
-    }
-    .nav-link:hover  { background: var(--surface2); color: var(--text); }
-    .nav-link.active { background: var(--surface2); color: var(--text); }
-    .nav-right { display: flex; align-items: center; gap: 1rem; margin-left: auto; }
-    #username-display { color: var(--muted); font-size: .875rem; }
-    .btn-logout {
-      padding: .35rem .85rem;
-      background: transparent;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--muted);
-      font-size: .85rem;
-      cursor: pointer;
-      transition: background .15s, color .15s;
-    }
-    .btn-logout:hover { background: var(--surface2); color: var(--text); }
-
-    /* ── Layout ─────────────────────────────────────────────────────────── */
-    .main { padding: 1.75rem 1.5rem; max-width: 1400px; margin: 0 auto; }
-
-    /* ── Section titles ─────────────────────────────────────────────────── */
-    .section-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 1.25rem;
-    }
-    .section-header h2 { font-size: 1.1rem; font-weight: 700; }
-
-    /* ── Buttons ────────────────────────────────────────────────────────── */
-    .btn {
-      padding: .45rem .9rem;
-      border: none;
-      border-radius: 6px;
-      font-size: .875rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background .15s, opacity .15s;
-    }
-    .btn:disabled { opacity: .55; cursor: not-allowed; }
-    .btn-primary  { background: var(--accent);  color: #fff; }
-    .btn-primary:hover  { background: var(--accent-dim); }
-    .btn-danger   { background: rgba(239,68,68,.15); color: #fca5a5; border: 1px solid rgba(239,68,68,.25); }
-    .btn-danger:hover   { background: rgba(239,68,68,.25); }
-    .btn-ghost    { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
-    .btn-ghost:hover    { background: #2e3f5c; }
-    .btn-sm { padding: .3rem .65rem; font-size: .8rem; }
-    .btn.active { background: var(--accent); color: #fff; outline: 2px solid var(--accent-dim); }
-
-    /* ── Alert ──────────────────────────────────────────────────────────── */
-    .alert {
-      padding: .65rem 1rem;
-      border-radius: 6px;
-      font-size: .875rem;
-      margin-bottom: 1rem;
-    }
-    .alert-error   { background: rgba(239,68,68,.15); color: #fca5a5; border: 1px solid rgba(239,68,68,.3); }
-    .alert-success { background: rgba(34,197,94,.15);  color: #86efac; border: 1px solid rgba(34,197,94,.3); }
-    .hidden { display: none !important; }
-
-    /* ── Token form ─────────────────────────────────────────────────────── */
-    .token-form {
-      display: flex;
-      gap: .75rem;
-      align-items: flex-end;
-      margin-bottom: 1.25rem;
-    }
-    .token-form .fgroup { flex: 1; display: flex; flex-direction: column; gap: .35rem; }
-    .token-form label { font-size: .78rem; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-    .token-form input {
-      padding: .55rem .85rem;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-      font-size: .9rem;
-      outline: none;
-      transition: border-color .15s;
-    }
-    .token-form input:focus { border-color: var(--accent); }
-
-    /* ── Collector form ─────────────────────────────────────────────────── */
-    .collector-form { margin-bottom: 1.5rem; }
-    .cf-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-      gap: .85rem;
-      margin-bottom: .85rem;
-    }
-    .collector-form .fgroup { display: flex; flex-direction: column; gap: .35rem; }
-    .collector-form label {
-      font-size: .78rem; font-weight: 500; color: var(--muted);
-      text-transform: uppercase; letter-spacing: .04em;
-    }
-    .collector-form input,
-    .collector-form select {
-      padding: .55rem .85rem;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-      font-size: .9rem;
-      outline: none;
-      transition: border-color .15s;
-    }
-    .collector-form input:focus,
-    .collector-form select:focus { border-color: var(--accent); }
-    .collector-form select option { background: var(--surface); }
-    .form-hint { font-size: .8rem; color: var(--muted); margin-bottom: .85rem; line-height: 1.5; }
-
-    /* ── Status badges ──────────────────────────────────────────────────── */
-    .status-badge {
-      display: inline-block;
-      padding: .15rem .55rem;
-      border-radius: 4px;
-      font-size: .72rem;
-      font-weight: 600;
-      letter-spacing: .03em;
-      white-space: nowrap;
-    }
-    .status-listening { background: rgba(34,197,94,.18);  color: #86efac; }
-    .status-warn      { background: rgba(245,158,11,.18); color: #fcd34d; }
-    .status-off       { background: rgba(100,116,139,.18); color: var(--muted); }
-    .status-error     { background: rgba(239,68,68,.18);  color: #fca5a5; }
-
-    /* ── Toggle switch ──────────────────────────────────────────────────── */
-    .switch { position: relative; display: inline-block; width: 38px; height: 21px; vertical-align: middle; }
-    .switch input { opacity: 0; width: 0; height: 0; }
-    .switch .slider {
-      position: absolute; cursor: pointer; inset: 0;
-      background: var(--border); border-radius: 21px; transition: background .15s;
-    }
-    .switch .slider::before {
-      content: ''; position: absolute;
-      height: 15px; width: 15px; left: 3px; bottom: 3px;
-      background: #fff; border-radius: 50%; transition: transform .15s;
-    }
-    .switch input:checked + .slider { background: var(--success); }
-    .switch input:checked + .slider::before { transform: translateX(17px); }
-    .switch input:disabled + .slider { opacity: .5; cursor: not-allowed; }
-
-    .row-actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
-
-    /* ── Table ──────────────────────────────────────────────────────────── */
-    .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); }
-    table { width: 100%; border-collapse: collapse; font-size: .875rem; }
-    thead th {
-      background: var(--surface);
-      padding: .65rem 1rem;
-      text-align: left;
-      font-weight: 600;
-      font-size: .78rem;
-      text-transform: uppercase;
-      letter-spacing: .05em;
-      color: var(--muted);
-      border-bottom: 1px solid var(--border);
-    }
-    tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; }
-    tbody tr:last-child { border-bottom: none; }
-    tbody tr:hover { background: var(--surface2); }
-    tbody td { padding: .65rem 1rem; color: var(--text); vertical-align: middle; }
-
-    .loading-cell, .empty-cell, .error-cell {
-      text-align: center;
-      padding: 2.5rem 1rem !important;
-      color: var(--muted);
-    }
-    .error-cell { color: #fca5a5; }
-    .muted { color: var(--muted); }
-    code { font-family: 'SF Mono', 'Fira Code', monospace; font-size: .82rem; color: #a5b4fc; }
-
-    /* ── Level badges ───────────────────────────────────────────────────── */
-    .level-badge {
-      display: inline-block;
-      padding: .15rem .55rem;
-      border-radius: 4px;
-      font-size: .75rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: .05em;
-    }
-    .level-error   { background: rgba(239,68,68,.18);  color: #fca5a5; }
-    .level-warn    { background: rgba(245,158,11,.18); color: #fcd34d; }
-    .level-info    { background: rgba(59,130,246,.18); color: #93c5fd; }
-    .level-debug   { background: rgba(107,114,128,.18); color: #d1d5db; }
-    .level-trace   { background: rgba(156,163,175,.12); color: #9ca3af; }
-    .level-default { background: rgba(100,116,139,.15); color: var(--muted); }
-
-    /* ── Log viewer controls ────────────────────────────────────────────── */
-    .log-controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: .75rem;
-      margin-bottom: 1rem;
-      align-items: stretch;
-    }
-    .search-wrap { flex: 1; min-width: 220px; position: relative; }
-    .search-wrap input {
-      width: 100%;
-      padding: .6rem .85rem .6rem 2.25rem;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-      font-size: .9rem;
-      outline: none;
-      transition: border-color .15s;
-    }
-    .search-wrap input:focus { border-color: var(--accent); }
-    .search-icon {
-      position: absolute;
-      left: .75rem;
-      top: 50%;
-      transform: translateY(-50%);
-      color: var(--muted);
-      font-size: .9rem;
-      pointer-events: none;
-    }
-    .filter-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: .75rem;
-      align-items: center;
-      margin-bottom: 1rem;
-    }
-    .filter-row select,
-    .filter-row input[type="date"] {
-      padding: .55rem .75rem;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-      font-size: .875rem;
-      outline: none;
-      transition: border-color .15s;
-      cursor: pointer;
-    }
-    .filter-row select:focus,
-    .filter-row input[type="date"]:focus { border-color: var(--accent); }
-    .filter-row select option { background: var(--surface); }
-    .filter-label { font-size: .78rem; color: var(--muted); font-weight: 500; }
-    .filter-group { display: flex; align-items: center; gap: .4rem; }
-    .log-stats { font-size: .8rem; color: var(--muted); margin-left: auto; }
-
-    /* ── Log table specifics ────────────────────────────────────────────── */
-    .col-time    { width: 110px; color: var(--muted); font-size: .82rem; white-space: nowrap; }
-    .col-app     { width: 130px; font-family: monospace; font-size: .82rem; color: #a5b4fc; }
-    .col-level   { width: 90px; }
-    .col-message { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .col-expand  { width: 36px; text-align: center; color: var(--muted); cursor: pointer; user-select: none; font-size: .75rem; }
-    .log-row     { cursor: pointer; }
-    .log-row.expanded { background: var(--surface2); }
-
-    /* ── Expanded row ───────────────────────────────────────────────────── */
-    .expand-row td { background: var(--bg); padding: 0 !important; }
-    .expand-content { padding: 1rem 1.25rem; border-top: 1px solid var(--border); }
-    .expand-label { font-size: .75rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .5rem; }
-    .json-view {
-      background: #0a0f1e;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: .85rem 1rem;
-      font-family: 'SF Mono', 'Fira Code', monospace;
-      font-size: .8rem;
-      color: #a5b4fc;
-      overflow-x: auto;
-      white-space: pre;
-      max-height: 400px;
-      overflow-y: auto;
-    }
-
-    /* ── Pagination ─────────────────────────────────────────────────────── */
-    #pagination {
-      display: flex;
-      gap: .35rem;
-      justify-content: center;
-      padding: 1rem 0 .5rem;
-      flex-wrap: wrap;
-    }
-    .pg-btn {
-      min-width: 34px;
-      padding: .35rem .6rem;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 5px;
-      color: var(--text);
-      font-size: .85rem;
-      cursor: pointer;
-      transition: background .15s;
-    }
-    .pg-btn:hover  { background: var(--surface2); }
-    .pg-btn.active { background: var(--accent); border-color: var(--accent); font-weight: 600; }
-    .pg-ellipsis   { padding: .35rem .4rem; color: var(--muted); font-size: .85rem; }
-
-    /* ── Integration snippet ────────────────────────────────────────────── */
-    .snippet-box {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 1.25rem;
-      margin-top: 1.5rem;
-    }
-    .snippet-box h3 { font-size: .9rem; font-weight: 600; margin-bottom: 1rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-    .snippet-select-wrap { margin-bottom: .85rem; }
-    .snippet-select-wrap select {
-      padding: .5rem .75rem;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-      font-size: .875rem;
-      outline: none;
-    }
-    .snippet-tabs { display: flex; gap: .4rem; margin-bottom: .6rem; }
-    .snippet-tab {
-      padding: .3rem .75rem;
-      border: 1px solid var(--border);
-      border-radius: 5px;
-      background: transparent;
-      color: var(--muted);
-      font-size: .82rem;
-      cursor: pointer;
-      transition: background .15s, color .15s;
-    }
-    .snippet-tab.active { background: var(--surface2); color: var(--text); }
-    .snippet-pane pre {
-      background: #0a0f1e;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: .85rem 1rem;
-      font-family: 'SF Mono', 'Fira Code', monospace;
-      font-size: .8rem;
-      color: #a5b4fc;
-      overflow-x: auto;
-      white-space: pre;
-    }
-
-    /* ── Token modal ────────────────────────────────────────────────────── */
-    .modal-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,.65);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 200;
-      padding: 1rem;
-    }
-    .modal {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 1.75rem;
-      max-width: 520px;
-      width: 100%;
-    }
-    .modal h3 { font-size: 1rem; font-weight: 700; margin-bottom: .5rem; }
-    .modal p  { color: var(--muted); font-size: .875rem; margin-bottom: 1rem; }
-    .token-display {
-      background: #0a0f1e;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: .85rem 1rem;
-      font-family: 'SF Mono', 'Fira Code', monospace;
-      font-size: .825rem;
-      color: #86efac;
-      word-break: break-all;
-      margin-bottom: 1rem;
-    }
-    .modal-actions { display: flex; gap: .75rem; justify-content: flex-end; }
-
-    /* ── Divider ────────────────────────────────────────────────────────── */
-    .divider { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
-  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/app.css" />
 </head>
 <body>
 
-  <!-- Navbar -->
-  <nav class="navbar">
-    <a class="nav-brand" href="/dashboard.html">
-      <svg width="22" height="22" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0">
-        <rect width="30" height="30" rx="6" fill="#6366f1"/>
-        <rect x="4" y="5"  width="22" height="5" rx="2.5" fill="white"/>
-        <rect x="4" y="12" width="16" height="5" rx="2.5" fill="white" opacity="0.75"/>
-        <rect x="4" y="19" width="19" height="5" rx="2.5" fill="white" opacity="0.5"/>
-      </svg>
-      Logbase
-    </a>
-    <div class="nav-links">
-      <button class="nav-link" data-section="logs">Logs</button>
-      <button class="nav-link" data-section="collectors">Collectors</button>
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <header class="app-header">
+    <div class="shell">
+      <a class="brand" href="/dashboard.html#logs">
+        <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <rect x="2" y="2" width="20" height="20" rx="6" fill="#C8F135"></rect>
+          <path d="M7 8h10M7 12h6M7 16h8" stroke="#0A0C0F" stroke-width="2" stroke-linecap="round"></path>
+        </svg>
+        Logbase
+      </a>
+
+      <nav class="nav" aria-label="Primary">
+        <button class="nav-link" data-view="logs" type="button">Logs</button>
+        <button class="nav-link" data-view="collectors" type="button">Collectors</button>
+      </nav>
+
+      <div class="spacer"></div>
+
+      <div class="menu-wrap">
+        <button id="account-btn" class="account" type="button" aria-haspopup="true" aria-expanded="false">
+          <span class="avatar" id="account-initials" aria-hidden="true">··</span>
+          <span style="font-size:13px" id="account-name">…</span>
+          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#98A2AE" stroke-width="2"><path d="m6 9 6 6 6-6"></path></svg>
+        </button>
+        <div id="account-menu" class="menu hidden" role="menu">
+          <button type="button" role="menuitem" id="logout-btn">
+            <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"></path></svg>
+            Sign out
+          </button>
+        </div>
+      </div>
     </div>
-    <div class="nav-right">
-      <span id="username-display"></span>
-      <button id="logout-btn" class="btn-logout">Sign out</button>
+  </header>
+
+  <!-- ══ LOGS ════════════════════════════════════════════════════════════ -->
+  <main class="page hidden" id="view-logs">
+
+    <div class="page-head">
+      <div>
+        <h1>Logs</h1>
+        <p>Search and inspect every event received by your collectors.</p>
+      </div>
+      <div class="head-actions">
+        <span class="mut" style="font-size:13px" id="logs-updated"></span>
+        <button type="button" class="btn" id="live-btn" aria-pressed="false">
+          <span class="live-dot off" aria-hidden="true"></span>
+          <span id="live-label">Live tail off</span>
+        </button>
+        <button type="button" class="btn" id="export-btn">
+          <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path></svg>
+          Export
+        </button>
+      </div>
     </div>
-  </nav>
 
-  <main class="main">
+    <!-- Search + time range -->
+    <div class="toolbar" id="logs-toolbar">
+      <div class="search">
+        <label for="q" class="sr-only">Search logs</label>
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#98A2AE" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+        <input id="q" type="search" autocomplete="off" placeholder="Search messages and fields — try timeout" />
+        <kbd>/</kbd>
+      </div>
+      <div class="segmented" role="group" aria-label="Time range" id="range-group">
+        <button type="button" data-range="15m" aria-pressed="false">15m</button>
+        <button type="button" data-range="1h"  aria-pressed="true">1h</button>
+        <button type="button" data-range="24h" aria-pressed="false">24h</button>
+        <button type="button" data-range="7d"  aria-pressed="false">7d</button>
+        <button type="button" data-range="all" aria-pressed="false">All</button>
+      </div>
+    </div>
 
-    <!-- ── Logs Section ───────────────────────────────────────────────── -->
-    <section id="section-logs" class="section hidden">
+    <!-- Filters -->
+    <div class="filters" id="logs-filters">
+      <span class="chip-select">
+        <span class="lbl">App</span>
+        <label for="filter-app" class="sr-only">Filter by app</label>
+        <select id="filter-app"><option value="">All</option></select>
+      </span>
+      <span class="chip-select">
+        <span class="lbl">Collector</span>
+        <label for="filter-collector" class="sr-only">Filter by collector</label>
+        <select id="filter-collector"><option value="">All</option></select>
+      </span>
+      <span class="vr" aria-hidden="true"></span>
+      <span class="lbl">Level</span>
+      <div id="level-pills" style="display:flex;flex-wrap:wrap;gap:8px"></div>
+      <div class="spacer"></div>
+      <button type="button" class="btn-link" id="clear-filters">Clear filters</button>
+    </div>
 
-      <div class="section-header">
-        <h2>Log Viewer</h2>
-        <div style="display:flex;gap:.6rem;align-items:center;">
-          <span id="log-count" class="log-stats"></span>
-          <button id="auto-refresh-btn" class="btn btn-ghost btn-sm">Auto-refresh</button>
-          <button id="clear-filters-btn" class="btn btn-ghost btn-sm">Clear filters</button>
-          <button class="btn btn-ghost btn-sm" onclick="loadLogs()">&#8635; Refresh</button>
+    <!-- Volume -->
+    <section class="panel" aria-label="Event volume" style="padding:16px 18px 12px" id="volume-panel">
+      <div class="chart-head">
+        <div style="font-size:13px">
+          <strong class="mono" id="volume-count" style="font-weight:600">0</strong>
+          <span class="mut" id="volume-caption">matching events</span>
+        </div>
+        <div class="chart-legend">
+          <span><i style="background:#FF6B5E"></i>Error</span>
+          <span><i style="background:#F5A524"></i>Warn</span>
+          <span><i style="background:#5EB1FF"></i>Info</span>
+          <span><i style="background:#8A939F"></i>Debug</span>
         </div>
       </div>
-
-      <!-- Search bar -->
-      <div class="log-controls">
-        <div class="search-wrap">
-          <span class="search-icon">&#128269;</span>
-          <input id="search-input" type="search" placeholder="Full-text search across all log fields…" />
-        </div>
-      </div>
-
-      <!-- Filters -->
-      <div class="filter-row">
-        <div class="filter-group">
-          <span class="filter-label">App</span>
-          <select id="filter-app"><option value="">All Apps</option></select>
-        </div>
-        <div class="filter-group">
-          <span class="filter-label">Level</span>
-          <select id="filter-level">
-            <option value="">All Levels</option>
-            <option value="error">error</option>
-            <option value="warn">warn</option>
-            <option value="info">info</option>
-            <option value="debug">debug</option>
-            <option value="trace">trace</option>
-          </select>
-        </div>
-        <div class="filter-group">
-          <span class="filter-label">From</span>
-          <input type="date" id="filter-from" />
-        </div>
-        <div class="filter-group">
-          <span class="filter-label">To</span>
-          <input type="date" id="filter-to" />
-        </div>
-        <div class="filter-group">
-          <span class="filter-label">Per page</span>
-          <select id="filter-limit">
-            <option value="25">25</option>
-            <option value="50" selected>50</option>
-            <option value="100">100</option>
-            <option value="200">200</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- Table -->
-      <div class="table-wrap" id="logs-table">
-        <table>
-          <thead>
-            <tr>
-              <th class="col-time">Time</th>
-              <th class="col-app">App</th>
-              <th class="col-level">Level</th>
-              <th>Message</th>
-              <th class="col-expand"></th>
-            </tr>
-          </thead>
-          <tbody id="logs-body">
-            <tr><td colspan="5" class="loading-cell">Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div id="pagination"></div>
+      <div class="chart" id="volume-chart" aria-hidden="true"></div>
+      <div class="chart-axis" id="volume-axis"></div>
     </section>
 
-    <!-- ── Collectors Section ─────────────────────────────────────────── -->
-    <section id="section-collectors" class="section hidden">
-
-      <div class="section-header">
-        <h2>Collectors</h2>
-        <button class="btn btn-ghost btn-sm" onclick="loadCollectors()">&#8635; Refresh</button>
-      </div>
-
-      <p style="color:var(--muted);font-size:.875rem;margin-bottom:1.25rem;line-height:1.6;">
-        A <strong style="color:var(--text)">collector</strong> is one configured ingestion endpoint. Choose how data
-        arrives (<strong style="color:var(--text)">transfer type</strong>), how it is authenticated
-        (<strong style="color:var(--text)">auth method</strong>), and how batches are encoded
-        (<strong style="color:var(--text)">input format</strong>). Collectors can be enabled or disabled at any time.
-      </p>
-
-      <div id="collector-alert" class="alert hidden"></div>
-      <div id="udp-platform-note" class="alert hidden" style="background:rgba(245,158,11,.12);color:#fcd34d;border:1px solid rgba(245,158,11,.3);"></div>
-
-      <!-- Create form -->
-      <form id="collector-form" class="collector-form">
-        <div class="cf-grid">
-          <div class="fgroup">
-            <label for="collector-name">Name</label>
-            <input id="collector-name" type="text" placeholder="e.g. edge-gateway" required />
-          </div>
-          <div class="fgroup">
-            <label for="collector-transfer">Transfer type</label>
-            <select id="collector-transfer"></select>
-          </div>
-          <div class="fgroup">
-            <label for="collector-auth">Auth method</label>
-            <select id="collector-auth"></select>
-          </div>
-          <div class="fgroup">
-            <label for="collector-format">Input format</label>
-            <select id="collector-format"></select>
-          </div>
-          <div class="fgroup hidden" id="fgroup-public-host">
-            <label for="collector-public-host">Public host</label>
-            <input id="collector-public-host" type="text" placeholder="e.g. logs.example.com" />
-          </div>
-          <div class="fgroup hidden" id="fgroup-port">
-            <label for="collector-port">Port</label>
-            <input id="collector-port" type="number" placeholder="10000" />
+    <!-- Results + detail -->
+    <div class="results-wrap">
+      <section class="panel results" aria-label="Results">
+        <div class="scroll-x">
+          <div class="log-grid">
+            <div class="log-cols log-head">
+              <span>Time</span><span>Level</span><span>App</span><span>Message</span><span></span>
+            </div>
+            <div id="logs-body">
+              <div class="state-cell">Loading…</div>
+            </div>
           </div>
         </div>
-        <p id="transfer-hint" class="form-hint"></p>
-        <button type="submit" class="btn btn-primary">Create Collector</button>
-      </form>
-
-      <!-- Collector list -->
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Transfer</th>
-              <th>Auth</th>
-              <th>Format</th>
-              <th>Endpoint</th>
-              <th>Status</th>
-              <th>Events</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="collector-list">
-            <tr><td colspan="8" class="loading-cell">Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <hr class="divider" />
-
-      <!-- Integration snippet -->
-      <div class="snippet-box">
-        <h3>Integration Guide</h3>
-        <div class="snippet-select-wrap">
-          <select id="snippet-collector-select">
-            <option value="">— select a collector —</option>
-          </select>
+        <div class="panel-foot">
+          <span style="font-size:13px" class="mut" id="logs-range-label"></span>
+          <div class="pager">
+            <label for="per-page" style="font-size:13px" class="mut">Rows</label>
+            <select id="per-page">
+              <option>25</option><option selected>50</option><option>100</option><option>200</option>
+            </select>
+            <button type="button" class="btn btn-icon" id="prev-page" aria-label="Previous page" disabled>
+              <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 6-6 6 6 6"></path></svg>
+            </button>
+            <span style="font-size:13px" class="mut mono" id="page-indicator">1</span>
+            <button type="button" class="btn btn-icon" id="next-page" aria-label="Next page">
+              <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"></path></svg>
+            </button>
+          </div>
         </div>
-        <div class="snippet-tabs" id="snippet-tabs"></div>
-        <div id="snippet-pane" class="snippet-pane"><pre></pre></div>
-      </div>
-    </section>
+      </section>
 
+      <aside class="detail hidden" id="detail-panel" aria-label="Event detail">
+        <div class="detail-head">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="lvl" id="detail-level">—</span>
+            <h2>Event detail</h2>
+          </div>
+          <button type="button" class="btn btn-icon btn-quiet" id="detail-close" aria-label="Close event detail" style="border:0">
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+          </button>
+        </div>
+        <div class="detail-body" id="detail-body"></div>
+      </aside>
+    </div>
   </main>
 
-  <!-- Credentials modal (shown once, after create or rotate) -->
-  <div id="secret-modal" class="modal-overlay hidden">
+  <!-- ══ LOGS — EMPTY (first run) ════════════════════════════════════════ -->
+  <main class="page hidden" id="view-logs-empty">
+    <div>
+      <h1 style="font-size:24px;font-weight:600;letter-spacing:-0.02em">Logs</h1>
+      <p class="mut" style="margin-top:4px">Search and inspect every event received by your collectors.</p>
+    </div>
+
+    <div class="toolbar" style="opacity:.5;pointer-events:none">
+      <div class="search">
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#98A2AE" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+        <input type="search" disabled placeholder="Search becomes available once events arrive" aria-label="Search disabled" />
+      </div>
+      <div class="segmented"><button type="button" aria-pressed="true">Last 1 hour</button></div>
+    </div>
+
+    <section class="empty" aria-labelledby="empty-h">
+      <div class="empty-grid">
+        <div class="empty-main">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <span class="eyebrow">Getting started</span>
+            <h2 id="empty-h">No logs yet. Connect a source and they’ll stream in here.</h2>
+            <p class="lede">Logbase receives events through collectors. Create one, point your app at its endpoint, and every event becomes searchable within seconds.</p>
+          </div>
+
+          <ol class="steps">
+            <li class="on">
+              <span class="n" aria-hidden="true">1</span>
+              <div><b>Create a collector</b><span>Pick HTTP or UDP, an auth method and a payload format.</span></div>
+            </li>
+            <li>
+              <span class="n" aria-hidden="true">2</span>
+              <div><b>Send a test event</b><span>Copy the ready-made curl command, or use the built-in Test button.</span></div>
+            </li>
+            <li>
+              <span class="n" aria-hidden="true">3</span>
+              <div><b>Search and filter</b><span>Events appear here with live tail, level filters and full-text search.</span></div>
+            </li>
+          </ol>
+
+          <div style="display:flex;flex-wrap:wrap;gap:10px">
+            <button type="button" class="btn btn-accent" style="min-height:44px;padding:0 18px" data-nav="new-collector">
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+              Create your first collector
+            </button>
+            <button type="button" class="btn" style="min-height:44px;padding:0 18px" data-nav="collectors">View collectors</button>
+          </div>
+        </div>
+
+        <div class="empty-side">
+          <div class="field-label">What an event looks like</div>
+          <pre class="code lg">[
+  {
+    "timestamp": "2026-10-15T08:32:17Z",
+    "level": "error",
+    "app": "checkout-api",
+    "message": "Payment gateway timeout"
+  }
+]</pre>
+          <p class="mut" style="font-size:13px;line-height:1.55">
+            <code class="mono" style="color:var(--text-2)">level</code>,
+            <code class="mono" style="color:var(--text-2)">app</code> and
+            <code class="mono" style="color:var(--text-2)">message</code> power the filters.
+            Any extra fields are kept and searchable.
+          </p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ══ COLLECTORS ══════════════════════════════════════════════════════ -->
+  <main class="page hidden" id="view-collectors">
+
+    <div class="page-head">
+      <div style="max-width:720px">
+        <h1>Collectors</h1>
+        <p>Each collector is an ingestion endpoint with its own transport, authentication and payload format. Pause one at any time without losing its settings.</p>
+      </div>
+      <div class="head-actions">
+        <button type="button" class="btn" id="collectors-refresh">
+          <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"></path></svg>
+          Refresh
+        </button>
+        <button type="button" class="btn btn-accent" style="min-height:44px;padding:0 18px" data-nav="new-collector">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+          New collector
+        </button>
+      </div>
+    </div>
+
+    <div id="collector-notice"></div>
+
+    <section class="panel" aria-label="Your collectors">
+      <div class="scroll-x">
+        <div class="col-grid">
+          <div class="col-cols col-head">
+            <span>Name</span><span>Transport</span><span>Auth · Format</span><span>Endpoint</span><span>Events</span><span>Status</span><span></span>
+          </div>
+          <div id="collector-rows"><div class="state-cell">Loading…</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Integration -->
+    <section class="panel hidden" id="integration-panel" aria-labelledby="int-h">
+      <div class="panel-head">
+        <div>
+          <h2 id="int-h">Send logs to <span class="mono" id="int-name">—</span></h2>
+          <p id="int-sub">Copy a snippet, run it, and watch the event land in Logs.</p>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <label for="int-select" style="font-size:13px" class="mut">Collector</label>
+          <select id="int-select" style="height:40px;padding:0 12px;border-radius:8px;border:1px solid var(--line-3);background:var(--surface-2);color:var(--text);font-size:13px"></select>
+        </div>
+      </div>
+      <div class="snippet-grid">
+        <div class="snippet-main">
+          <div class="tabs" role="tablist" aria-label="Snippet language" id="snippet-tabs"></div>
+          <div class="snippet-box">
+            <pre class="code lg" id="snippet-code"></pre>
+            <div class="tools">
+              <button type="button" class="btn btn-icon sm hidden" id="snippet-reveal" aria-label="Reveal secret" title="Reveal secret">
+                <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              </button>
+              <button type="button" class="btn btn-sm" id="snippet-copy">
+                <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
+                Copy
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="snippet-side">
+          <div>
+            <div class="field-label" style="margin-bottom:8px">Verify the connection</div>
+            <button type="button" class="btn btn-accent" style="width:100%;min-height:44px" id="int-test">Send test event</button>
+          </div>
+          <div id="int-test-result"></div>
+          <div class="mut" style="font-size:13px;line-height:1.55" id="int-security"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ══ NEW COLLECTOR ═══════════════════════════════════════════════════ -->
+  <main class="page hidden" id="view-new-collector">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="#collectors">Collectors</a> <span aria-hidden="true">/</span> <span style="color:var(--text)">New collector</span>
+    </nav>
+
+    <div>
+      <h1 style="font-size:24px;font-weight:600;letter-spacing:-0.02em">New collector</h1>
+      <p class="mut" style="margin-top:4px">Choose how events arrive, how they’re authenticated and how each batch is encoded.</p>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start">
+
+      <form class="form" id="new-collector-form" style="flex:999 1 600px;min-width:0" novalidate>
+
+        <section>
+          <label for="nc-name" style="font-weight:600">Name</label>
+          <input id="nc-name" type="text" placeholder="edge-gateway" aria-describedby="nc-name-h"
+                 style="height:44px;padding:0 14px;border-radius:10px;border:1px solid var(--line-3);background:var(--surface-2);color:var(--text);font-family:var(--mono);font-size:13px;max-width:420px" />
+          <span id="nc-name-h" class="mut" style="font-size:13px">Shown in the Collector filter and on every event. Lowercase letters, numbers and dashes.</span>
+        </section>
+
+        <fieldset style="margin:0;padding:22px 24px;border:0;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:12px">
+          <legend class="legend" style="padding:0;margin-bottom:12px">Transport</legend>
+          <div class="choices" id="nc-transports"></div>
+          <div id="nc-transport-note"></div>
+        </fieldset>
+
+        <section>
+          <div class="legend">Authentication</div>
+          <div id="nc-auth-choices"></div>
+          <div id="nc-auth-readout"></div>
+        </section>
+
+        <fieldset style="margin:0;padding:22px 24px;border:0;border-bottom:1px solid var(--line)">
+          <legend class="legend" style="padding:0;margin-bottom:12px">Payload format</legend>
+          <div class="choices" id="nc-formats"></div>
+        </fieldset>
+
+        <section id="nc-listener" class="hidden">
+          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px">
+            <div class="legend">Listener</div>
+            <span class="mut" style="font-size:13px" id="nc-listener-usage"></span>
+          </div>
+          <div class="two-col">
+            <div class="field">
+              <label for="nc-host">Public host</label>
+              <input id="nc-host" type="text" placeholder="logs.example.com" aria-describedby="nc-host-h" />
+              <span class="hint" id="nc-host-h">Used in the endpoint and snippets your senders copy.</span>
+            </div>
+            <div class="field">
+              <label for="nc-port">Port</label>
+              <input id="nc-port" type="number" aria-describedby="nc-port-h" />
+              <span class="hint" id="nc-port-h"></span>
+            </div>
+          </div>
+        </section>
+
+        <div id="nc-error"></div>
+
+        <div class="form-foot">
+          <button type="button" class="btn" style="min-height:44px;padding:0 18px" data-nav="collectors">Cancel</button>
+          <button type="submit" class="btn btn-accent" style="min-height:44px;padding:0 20px" id="nc-submit">Create collector</button>
+        </div>
+      </form>
+
+      <aside aria-label="Preview" style="flex:1 1 380px;min-width:0;display:flex;flex-direction:column;gap:12px">
+        <div class="panel">
+          <div style="padding:14px 18px;border-bottom:1px solid var(--line)" class="field-label">Preview</div>
+          <dl class="kv" style="padding:16px 18px">
+            <dt>Endpoint</dt><dd class="mono" id="pv-endpoint">—</dd>
+            <dt>Auth</dt><dd id="pv-auth">—</dd>
+            <dt>Format</dt><dd id="pv-format">—</dd>
+            <dt>Security</dt><dd id="pv-security">—</dd>
+          </dl>
+          <div style="padding:0 18px 18px">
+            <div class="field-label" style="margin-bottom:8px">Send your first event</div>
+            <pre class="code" id="pv-snippet"></pre>
+          </div>
+        </div>
+        <p class="mut" style="padding:0 4px;font-size:13px;line-height:1.55">
+          After creating, you’ll get a ready-to-run snippet with your real endpoint<span id="pv-token-note"></span>
+          and a <strong style="color:var(--text);font-weight:500">Send test event</strong> button.
+        </p>
+      </aside>
+    </div>
+  </main>
+
+  <!-- ── Secrets modal ───────────────────────────────────────────────────── -->
+  <div class="overlay hidden" id="secret-modal" role="dialog" aria-modal="true" aria-labelledby="secret-title">
     <div class="modal">
-      <h3 id="secret-modal-title">Collector created</h3>
-      <p>Copy these credentials now — they will not be shown again.</p>
-      <div id="secret-modal-body"></div>
-      <div class="modal-actions">
-        <button id="copy-secret-btn" class="btn btn-ghost" onclick="copySecrets()">Copy</button>
-        <button class="btn btn-primary" onclick="closeSecretModal()">Done</button>
+      <div class="modal-head">
+        <h3 id="secret-title">Collector created</h3>
+        <p>Copy these credentials now — they are shown once and cannot be retrieved later.</p>
+      </div>
+      <div class="modal-body" id="secret-body"></div>
+      <div class="modal-foot">
+        <button type="button" class="btn" id="secret-copy">Copy all</button>
+        <button type="button" class="btn btn-accent" id="secret-done">Done</button>
       </div>
     </div>
   </div>
+
+  <!-- ── Confirm modal ───────────────────────────────────────────────────── -->
+  <div class="overlay hidden" id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="modal" style="max-width:460px">
+      <div class="modal-head">
+        <h3 id="confirm-title">Are you sure?</h3>
+        <p id="confirm-text"></p>
+      </div>
+      <div class="modal-foot" style="padding-top:18px">
+        <button type="button" class="btn" id="confirm-cancel">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-ok">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
 
   <script src="/js/dashboard.js"></script>
 </body>

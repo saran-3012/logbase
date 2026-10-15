@@ -3,6 +3,9 @@ services:
     build: .
     ports:
       - "3000:3000"
+      # UDP collector port range — this is the deployment where UDP ingestion
+      # works end to end (unlike single-port PaaS hosts such as Render).
+      - "10000-10010:10000-10010/udp"
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -14,4 +17,15 @@ services:
       # Local SQLite fallback: file:./data/logs.db
       TURSO_DATABASE_URL: ${TURSO_DATABASE_URL:?TURSO_DATABASE_URL env variable is required}
       TURSO_AUTH_TOKEN: ${TURSO_AUTH_TOKEN:-}
+      # Ingestion
+      INGEST_BODY_LIMIT: ${INGEST_BODY_LIMIT:-10mb}
+      MAX_BATCH_SIZE: ${MAX_BATCH_SIZE:-1000}
+      PUBLIC_INGEST_HOST: ${PUBLIC_INGEST_HOST:-}
+      # UDP listener
+      UDP_ENABLED: ${UDP_ENABLED:-true}
+      UDP_BIND_HOST: ${UDP_BIND_HOST:-0.0.0.0}
+      UDP_PORT_RANGE: ${UDP_PORT_RANGE:-10000-10010}
+      UDP_MAX_LISTENERS: ${UDP_MAX_LISTENERS:-1}
+      UDP_MAX_PACKET_BYTES: ${UDP_MAX_PACKET_BYTES:-65507}
+      UDP_QUEUE_SIZE: ${UDP_QUEUE_SIZE:-5000}
     restart: unless-stopped

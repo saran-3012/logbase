@@ -2,5 +2,21 @@
   {
     "version": 1,
     "description": "Baseline schema — tables, indexes, and FTS defined in tables.json / indexes.json"
+  },
+  {
+    "version": 2,
+    "type": "raw",
+    "description": "Collector model rebuild — drop api_tokens / oauth_clients era objects (destructive)",
+    "comment": "Drop order matters: FTS triggers reference logs, logs_fts is contentless-backed by logs, and oauth_refresh_tokens / logs hold FKs into the dropped tables. compileSchema() runs again after migrations in database.js#init() and recreates everything with the new column set.",
+    "statements": [
+      "DROP TRIGGER IF EXISTS logs_ai",
+      "DROP TRIGGER IF EXISTS logs_ad",
+      "DROP TRIGGER IF EXISTS logs_au",
+      "DROP TABLE IF EXISTS logs_fts",
+      "DROP TABLE IF EXISTS oauth_refresh_tokens",
+      "DROP TABLE IF EXISTS logs",
+      "DROP TABLE IF EXISTS api_tokens",
+      "DROP TABLE IF EXISTS oauth_clients"
+    ]
   }
 ]

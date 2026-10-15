@@ -2,10 +2,8 @@
 const express     = require('express');
 const bcrypt      = require('bcryptjs');
 const jwt         = require('jsonwebtoken');
-const crypto      = require('crypto');
 const db          = require('../db/database');
-const sessionAuth = require('../middleware/sessionAuth');
-const { SelectQuery, InsertQuery, DeleteQuery, eq, aliasExpr, col, rawExpr } = require('../db/query');
+const { SelectQuery, InsertQuery, eq } = require('../db/query');
 
 const router = express.Router();
 
@@ -76,62 +74,13 @@ router.post('/login', wrap(async (req, res) => {
   res.json({ token, username: user.username });
 }));
 
-/* ── POST /auth/tokens ────────────────────────────────────────────────────── */
-router.post('/tokens', sessionAuth, wrap(async (req, res) => {
-  const { name } = req.body || {};
-  if (!name || typeof name !== 'string' || !name.trim()) {
-    return res.status(400).json({ error: 'Token name is required' });
-  }
-
-  // 64-char random hex token
-  const token = crypto.randomBytes(32).toString('hex');
-
-  try {
-    const result = await db.query(
-      new InsertQuery('api_tokens')
-        .values({ user_id: req.user.userId, name: name.trim(), token })
-    );
-    res.status(201).json({ id: result.lastInsertRowid, name: name.trim(), token });
-  } catch (err) {
-    if (err.message && err.message.includes('UNIQUE')) {
-      return res.status(409).json({ error: 'A token with that name already exists' });
-    }
-    throw err;
-  }
-}));
-
-/* ── GET /auth/tokens ─────────────────────────────────────────────────────── */
-router.get('/tokens', sessionAuth, wrap(async (req, res) => {
-  const tokens = await db.query(
-    new SelectQuery('api_tokens')
-      .columns([
-        col('id'), col('name'), col('created_at'), col('last_used_at'),
-        aliasExpr(rawExpr("substr(token, 1, 8) || '...'"), 'token_preview'),
-      ])
-      .where(eq('user_id', req.user.userId))
-      .orderBy('created_at', 'DESC')
-  );
-  res.json(tokens);
-}));
-
-/* ── DELETE /auth/tokens/:id ──────────────────────────────────────────────── */
-router.delete('/tokens/:id', sessionAuth, wrap(async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (!Number.isInteger(id)) {
-    return res.status(400).json({ error: 'Invalid token id' });
-  }
-
-  const result = await db.query(
-    new DeleteQuery('api_tokens')
-      .where(eq('id', id))
-      .where(eq('user_id', req.user.userId))
-  );
-
-  if (result.changes === 0) {
-    return res.status(404).json({ error: 'Token not found' });
-  }
-  res.json({ message: 'Token revoked' });
-}));
+/*
+ * API token management moved to /collectors.
+ * A token now belongs to an HTTP collector with auth_method='api_token':
+ *   POST   /collectors            { transfer_type: 'http', auth_method: 'api_token', … }
+ *   POST   /collectors/:id/rotate
+ *   DELETE /collectors/:id
+ */
 
 module.exports = router;
 

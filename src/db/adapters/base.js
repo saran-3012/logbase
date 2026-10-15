@@ -105,6 +105,13 @@ class BaseAdapter {
    *   uniqueConstraints  — array of column-name arrays for multi-column UNIQUE
    *   fullTextSearch     — { columns: string[] }  (adapter chooses FTS mechanism)
    *
+   * Supported index properties:
+   *   name, table, columns  — required
+   *   unique   — boolean; emit a UNIQUE index
+   *   where    — string predicate for a partial index (backends that support it).
+   *              Combined with `unique` this expresses conditional constraints,
+   *              e.g. { unique: true, where: "transfer_type = 'udp'" }.
+   *
    * @param {object[]} tables   — parsed tables.json
    * @param {object[]} indexes  — parsed indexes.json
    * @returns {string[]}
@@ -121,6 +128,10 @@ class BaseAdapter {
    *   { type: 'addIndex',     name, table, columns }
    *   { type: 'dropIndex',    name }
    *   { type: 'renameColumn', table, from, to }        — not supported by all backends
+   *   { type: 'dropTable',    table }
+   *   { type: 'raw',          statements: string[] }   — dialect-specific escape hatch;
+   *                                                      statements run in order inside
+   *                                                      the migration transaction
    *
    * Baseline-only entry (version 1 with no type) returns an empty array.
    *

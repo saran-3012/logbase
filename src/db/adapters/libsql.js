@@ -125,6 +125,23 @@ class LibSQLAdapter extends BaseAdapter {
    *   references → REFERENCES table(col) ON DELETE …
    *   fullTextSearch → FTS5 virtual table + three sync triggers (ai/ad/au)
    */
+  /**
+   * Render a column default as a SQLite literal.
+   *
+   * String defaults MUST use single quotes: SQLite resolves a double-quoted
+   * token as an identifier first and only falls back to a string literal when
+   * no column/function of that name exists. A default like "json_array" would
+   * otherwise collide with the built-in json_array() function and be rejected
+   * with "default value is not constant".
+   */
+  _defaultLiteral(value) {
+    if (value === 'now') return 'unixepoch()';
+    if (typeof value === 'string') return `'${value.replace(/'/g, "''")}'`;
+    if (value === null) return 'NULL';
+    if (typeof value === 'boolean') return value ? '1' : '0';
+    return String(value);
+  }
+
   compileSchema(tables, indexes) {
     const stmts = [];
 
@@ -135,8 +152,7 @@ class LibSQLAdapter extends BaseAdapter {
         if (col.notNull)    parts.push('NOT NULL');
         if (col.unique)     parts.push('UNIQUE');
         if (col.default !== undefined) {
-          const def = col.default === 'now' ? 'unixepoch()' : JSON.stringify(col.default);
-          parts.push(`DEFAULT (${def})`);
+          parts.push(`DEFAULT (${this._defaultLiteral(col.default)})`);
         }
         if (col.references) {
           const ref = col.references;
@@ -187,8 +203,13 @@ class LibSQLAdapter extends BaseAdapter {
     }
 
     for (const idx of indexes) {
+      // `unique: true`      → CREATE UNIQUE INDEX
+      // `where: "<predicate>"` → SQLite partial index; combined with unique this is
+      // how constraints like "only one UDP collector per user" are enforced in the DB.
+      const uniq  = idx.unique ? 'UNIQUE ' : '';
+      const where = idx.where  ? ` WHERE ${idx.where}` : '';
       stmts.push(
-        `CREATE INDEX IF NOT EXISTS ${idx.name} ON ${idx.table}(${idx.columns.join(', ')})`
+        `CREATE ${uniq}INDEX IF NOT EXISTS ${idx.name} ON ${idx.table}(${idx.columns.join(', ')})${where}`
       );
     }
 
@@ -197,13 +218,23 @@ class LibSQLAdapter extends BaseAdapter {
 
   /**
    * Compile a structured migration operation into LibSQL/SQLite DDL strings.
-   * Supported types: addColumn, addIndex, dropIndex, renameColumn.
+   * Supported types: addColumn, addIndex, dropIndex, renameColumn, dropTable, raw.
    * Baseline-only entries (no type field) return an empty array.
    */
   compileMigration(migration) {
     if (!migration.type) return []; // baseline marker, nothing to run
 
     switch (migration.type) {
+      case 'raw': {
+        // Escape hatch for dialect-specific / destructive operations that have no
+        // neutral representation (dropping FTS triggers, rebuilding tables, …).
+        if (!Array.isArray(migration.statements) || migration.statements.length === 0) {
+          throw new Error('raw migration requires a non-empty "statements" array');
+        }
+        return migration.statements;
+      }
+      case 'dropTable':
+        return [`DROP TABLE IF EXISTS ${migration.table}`];
       case 'addColumn': {
         const col = migration.column;
         const parts = [col.type.toUpperCase()];
@@ -211,8 +242,7 @@ class LibSQLAdapter extends BaseAdapter {
           throw new Error(`addColumn "${col.name}": NOT NULL column requires a default for existing rows`);
         if (col.notNull)    parts.push('NOT NULL');
         if (col.default !== undefined) {
-          const def = col.default === 'now' ? 'unixepoch()' : JSON.stringify(col.default);
-          parts.push(`DEFAULT (${def})`);
+          parts.push(`DEFAULT (${this._defaultLiteral(col.default)})`);
         }
         if (col.references) {
           const ref = col.references;

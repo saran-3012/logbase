@@ -1,7 +1,11 @@
 node_modules/
 data/
-.env
 .git/
 .gitignore
+.github/
 *.md
-.env.example
+
+# Environment files — never bake credentials into an image.
+# The container is configured entirely through compose / platform env vars.
+.env
+.env.*

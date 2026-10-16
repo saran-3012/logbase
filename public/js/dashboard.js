@@ -550,7 +550,6 @@ function statusMeta(c) {
   }
   if (!c.enabled) return ['status-off', 'Paused'];
   if (s === 'listening') return ['status-ok', 'Listening'];
-  if (s === 'listening_no_platform_ingress') return ['status-warn', 'Bound · no ingress'];
   if (s === 'capacity_exceeded')  return ['status-warn', 'Slot taken'];
   if (s === 'disabled_by_config') return ['status-off', 'UDP off'];
   if (s.startsWith('bind_error')) return ['status-err', 'Bind error'];
@@ -562,7 +561,7 @@ async function loadCollectors() {
   try {
     await loadCapabilities();
     state.collectors = await api('GET', '/collectors') || [];
-    renderPlatformNotice();
+    renderCollectorNotice();
     renderCollectorRows();
     renderIntegration();
   } catch (err) {
@@ -570,22 +569,27 @@ async function loadCollectors() {
   }
 }
 
-function renderPlatformNotice() {
+/**
+ * Collector-level notice.
+ *
+ * Only conditions the user can act on are surfaced here, and only when they are
+ * relevant to a collector they actually own. Deployment and hosting details are
+ * operator concerns and belong in the server log, not in the dashboard.
+ */
+function renderCollectorNotice() {
   const udp = state.capabilities?.udp;
   const el  = $('collector-notice');
-  if (!udp) { el.innerHTML = ''; return; }
+  if (!el) return;
 
-  if (!udp.enabled) {
+  const hasUdp = state.collectors.some(c => c.transfer_type === 'udp');
+
+  if (udp && !udp.enabled && hasUdp) {
     el.innerHTML = `<div class="note note-warn">${warnIcon()}
-      <span>UDP ingestion is disabled on this server (<code>UDP_ENABLED=false</code>). Existing UDP collectors keep their settings but will not bind.</span></div>`;
-  } else if (udp.platform_no_ingress) {
-    el.innerHTML = `<div class="note note-warn">${warnIcon()}
-      <span><strong>This host doesn’t route inbound UDP.</strong> Listeners bind and the pipeline works — verify with
-      <strong style="font-weight:600">Send test event</strong> — but datagrams from outside won’t arrive. Run Logbase on Docker or a VPS,
-      or place <code>tools/udp-forwarder</code> next to your log source.</span></div>`;
-  } else {
-    el.innerHTML = '';
+      <span>UDP ingestion is turned off by the server configuration. Existing UDP collectors keep their settings but will not listen.</span></div>`;
+    return;
   }
+
+  el.innerHTML = '';
 }
 
 function warnIcon() {
@@ -608,7 +612,6 @@ function renderCollectorRows() {
     const sel  = state.intCollector === c.id ? ' sel' : '';
     const auth = state.capabilities?.authMethods[c.auth_method] || c.auth_method;
     const fmt  = c.input_format === 'json_array' ? 'JSON array' : 'NDJSON';
-    const warn = c.transfer_type === 'udp' && c.enabled && c.listener_status === 'listening_no_platform_ingress';
     const bindErr = String(c.listener_status || '').startsWith('bind_error');
 
     return `<div class="col-row${sel}" data-id="${c.id}">
@@ -648,10 +651,6 @@ function renderCollectorRows() {
           </div>
         </div>
       </div>
-      ${warn ? `<div class="note note-warn note-row">${warnIcon()}
-        <span>No external datagrams can reach this host — it doesn’t route inbound UDP. The listener and pipeline still work
-        (try <strong style="font-weight:600">Send test event</strong>). To receive real traffic, run Logbase on Docker or a VPS,
-        or run <code>tools/udp-forwarder</code> next to your log source.</span></div>` : ''}
       ${bindErr ? `<div class="note note-err note-row">${warnIcon()}
         <span>The listener could not bind: <code>${esc(c.listener_status)}</code>. The port may be in use by another process.</span></div>` : ''}
     </div>`;
@@ -1046,11 +1045,7 @@ function renderNewCollector() {
 
   /* Transport-level warning */
   const noteEl = $('nc-transport-note');
-  if (isUdp && caps.udp?.platform_no_ingress) {
-    noteEl.innerHTML = `<div class="note note-warn" role="note">${warnIcon()}
-      <span><strong>This host doesn’t route inbound UDP.</strong> The listener will bind and you can verify the pipeline with a test event,
-      but datagrams from outside won’t arrive. Run Logbase on Docker or a VPS, or place <code>tools/udp-forwarder</code> next to your log source.</span></div>`;
-  } else if (isUdp) {
+  if (isUdp) {
     noteEl.innerHTML = `<div class="note note-warn" role="note">${warnIcon()}
       <span>UDP is <strong>unauthenticated and unencrypted</strong>. Anyone who can reach the port can write events to this collector — restrict access with your firewall.</span></div>`;
   } else {

@@ -18,7 +18,8 @@ const DRAIN_BATCH       = parseInt(process.env.UDP_DRAIN_BATCH, 10) || 200;
 const RECONCILE_MS      = parseInt(process.env.UDP_RECONCILE_INTERVAL_MS, 10) || 60_000;
 
 // Render routes HTTP only — a UDP socket binds fine inside the container but no
-// external datagram will ever reach it. Detected so the UI can be honest.
+// external datagram will ever reach it. This is operator-level deployment detail,
+// so it is surfaced once in the server log and never in the dashboard.
 const PLATFORM_NO_UDP_INGRESS = Boolean(process.env.RENDER);
 
 function parsePortRange(raw) {
@@ -59,7 +60,6 @@ class ListenerManager {
       maxListeners:       UDP_MAX_LISTENERS,
       portRange:          PORT_RANGE,
       queueSize:          UDP_QUEUE_SIZE,
-      platformNoIngress:  PLATFORM_NO_UDP_INGRESS,
       publicHost:         process.env.PUBLIC_INGEST_HOST || null,
     };
   }
@@ -328,9 +328,7 @@ class ListenerManager {
     if (collector && !collector.enabled) return 'disabled';
 
     const listener = this.listeners.get(id);
-    if (listener && listener.started) {
-      return PLATFORM_NO_UDP_INGRESS ? 'listening_no_platform_ingress' : 'listening';
-    }
+    if (listener && listener.started) return 'listening';
     return this.statuses.get(id) || 'stopped';
   }
 

@@ -92,7 +92,6 @@ router.get('/capabilities', sessionAuth, wrap(async (req, res) => {
       active_listeners:    listenerManager.activeListenerCount(),
       port_range:          cfg.portRange,
       bind_host:           cfg.bindHost,
-      platform_no_ingress: cfg.platformNoIngress,
       public_host:         cfg.publicHost,
     },
   });

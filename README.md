@@ -85,7 +85,7 @@ printf '[{"app":"edge","level":"warn","message":"retry"}]' | nc -u -w1 your-host
 
 ### ⚠️ UDP on Render
 
-**Render web services route HTTP(S) to a single port and do not route inbound UDP on any service type.** On Render the socket binds inside the container and the full parse → store pipeline works — verify with `POST /collectors/:id/test`, which sends a loopback datagram — but external datagrams never arrive. The dashboard reports this honestly as *"Bound (no platform ingress)"*.
+**Render web services route HTTP(S) to a single port and do not route inbound UDP on any service type.** On Render the socket binds inside the container and the full parse → store pipeline works — verify with `POST /collectors/:id/test`, which sends a loopback datagram — but external datagrams never arrive. This is a deployment concern, so it is logged once at startup rather than shown in the dashboard.
 
 Two working options:
 

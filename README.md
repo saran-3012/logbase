@@ -104,7 +104,66 @@ npm run udp-forwarder
 
 ## Getting Started
 
-### Run with Docker (recommended for UDP)
+### Run locally (one command)
+
+**Prerequisites:** Node.js **v20+** — nothing else. No database to install, no Docker.
+
+```bash
+git clone <repo-url> logbase
+cd logbase
+npm run local
+```
+
+Open **http://localhost:3000** and register an account.
+
+`scripts/dev.sh` does the setup for you:
+
+| Step | What happens |
+|---|---|
+| Checks Node | Fails early if older than v20 (`package.json` requires it) |
+| Installs deps | `npm ci` when `node_modules` is missing or older than the lockfile |
+| Creates `.env.local` | Generates a random `JWT_SECRET`, points the DB at `file:./data/local.db` |
+| Checks the port | Names the process holding it instead of a raw `EADDRINUSE` |
+| Starts the server | `exec`s Node so Ctrl-C releases the UDP sockets cleanly |
+
+`.env.local` is git-ignored and **takes precedence over `.env`**, so a local run
+never touches your cloud Turso database even though `.env` points at it. Real
+environment variables still win over both — `PORT=4000 npm run local` works.
+
+| Command | Use |
+|---|---|
+| `npm run setup` | One-time setup (optional — `dev` runs it automatically) |
+| `npm run local` | Normal start |
+| `npm run dev` | Watch mode — restarts on changes in `src/` and `public/` |
+| `npm run local:fresh` | Delete the local database and start from an empty schema |
+| `./scripts/dev.sh --port 4000` | Different HTTP port |
+| `./scripts/dev.sh --turso` | Use `.env` as-is — ⚠ reads and writes the **cloud** database |
+| `npm run start:raw` | Plain `node src/server.js`, no script (what Render/Docker run) |
+
+Every other operational task is a script in `scripts/` with an npm alias —
+`npm run check`, `npm test`, `npm run ci`, `npm run db:status`,
+`npm run docker:up`, `npm run deploy:check`. See **[scripts/README.md](scripts/README.md)**
+for the full reference.
+
+#### Try UDP ingestion locally
+
+UDP works fully on localhost — the datagram never leaves your machine, so there
+is no platform or NAT in the path.
+
+1. **Collectors → New collector** → transport **UDP**, format **NDJSON**, port **10000**.
+2. Send an event:
+
+```bash
+printf '%s\n' '{"level":"info","app":"my-service","message":"hello"}' \
+  | nc -u -w1 127.0.0.1 10000
+```
+
+It appears in **Logs** within a second.
+
+Keep each datagram under ~1472 bytes (typical MTU). NDJSON degrades gracefully
+past that; an oversized JSON array arrives truncated and fails to parse.
+
+### Run with Docker
 
 ```bash
 # 1. Set your secret (required)
@@ -118,19 +177,16 @@ docker compose up -d
 docker compose logs -f
 ```
 
-### Run without Docker
-
-**Prerequisites:** Node.js **v18+** (v22 recommended)
+### Manual setup (without the script)
 
 ```bash
-git clone <repo-url> logbase
-cd logbase
 npm install
 cp .env.example .env     # then set JWT_SECRET and TURSO_DATABASE_URL
-npm start                # or: npm run dev
+npm run start:raw
 ```
 
-Open **http://localhost:3000**.
+For a local database without Turso, set `TURSO_DATABASE_URL=file:./data/local.db`
+and leave `TURSO_AUTH_TOKEN` empty.
 
 ### Deploy to Render
 
@@ -237,8 +293,14 @@ logbase/
 │   ├── dashboard.html               # Logs explorer, collectors, new-collector wizard
 │   ├── css/app.css                  # Design tokens + all component styles
 │   └── js/{auth,dashboard}.js       # Client logic (no build step, no framework)
-├── scripts/db-reset.js              # Destructive schema reset
+├── scripts/                         # DevOps — see scripts/README.md
+│   ├── lib/common.sh                # Shared helpers (sourced)
+│   ├── setup.sh  dev.sh             # Environment setup, local run
+│   ├── check.sh  test.sh  ci.sh     # Static checks, e2e tests, pipeline
+│   ├── db.sh     db-reset.js        # Status, backup, reset, console
+│   └── docker.sh deploy.sh          # Containers, deployment preflight
 ├── tools/udp-forwarder/             # UDP → HTTP relay for UDP-less platforms
+├── .github/workflows/ci.yml         # Runs scripts/ci.sh on push and PR
 ├── render.yaml                      # Render blueprint
 └── docker-compose.yml
 ```
@@ -409,10 +471,19 @@ Aggregates powering the dashboard's level pills and volume histogram. Accepts
 
 Schema lives in `src/db/schema/` as dialect-neutral JSON and is applied on every boot. Migrations run in order and are tracked in `_schema_version`.
 
-To wipe everything and recreate the current schema (**destructive** — all users, logs, and collectors are lost):
+```bash
+npm run db:status     # schema version, row counts, file size
+npm run db:backup     # consistent snapshot into data/backups/
+npm run db:console    # sqlite3 shell
+npm run db:reset      # DESTRUCTIVE — drop and recreate (prompts first)
+```
+
+All of these target the **local** database. Add `--turso` to operate on the
+cloud one:
 
 ```bash
-npm run db:reset -- --yes
+npm run db:status -- --turso
+npm run db:reset  -- --turso --yes   # ⚠ wipes production
 ```
 
 ---

@@ -8,8 +8,30 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
-    "db:reset": "node scripts/db-reset.js",
+    "start:raw": "node src/server.js",
+
+    "setup": "./scripts/setup.sh",
+    "dev": "./scripts/dev.sh --watch",
+    "local": "./scripts/dev.sh",
+    "local:fresh": "./scripts/dev.sh --fresh",
+
+    "check": "./scripts/check.sh",
+    "test": "./scripts/test.sh",
+    "ci": "./scripts/ci.sh",
+
+    "db:status": "./scripts/db.sh status",
+    "db:backup": "./scripts/db.sh backup",
+    "db:reset": "./scripts/db.sh reset",
+    "db:console": "./scripts/db.sh console",
+
+    "docker:up": "./scripts/docker.sh up",
+    "docker:down": "./scripts/docker.sh down",
+    "docker:logs": "./scripts/docker.sh logs",
+    "docker:status": "./scripts/docker.sh status",
+
+    "deploy:check": "./scripts/deploy.sh",
+    "deploy": "./scripts/deploy.sh --push",
+
     "udp-forwarder": "node tools/udp-forwarder/index.js"
   },
   "dependencies": {

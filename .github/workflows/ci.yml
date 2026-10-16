@@ -6,10 +6,16 @@ on:
   pull_request:
     branches: [master]
 
+# A new push supersedes an in-flight run on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     name: Verify
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
@@ -22,39 +28,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Syntax check all sources
-        run: find src scripts tools -name '*.js' -print0 | xargs -0 -n1 node --check
-
-      - name: Validate JSON schema definitions
+      # Catches issues in the scripts themselves before they run.
+      - name: Lint shell scripts
         run: |
-          node -e "
-            const t = require('./src/db/schema/tables.json');
-            const i = require('./src/db/schema/indexes.json');
-            const m = require('./src/db/schema/migrations.json');
-            const Adapter = require('./src/db/adapters/libsql');
-            const a = Object.create(Adapter.prototype);
-            const ddl = a.compileSchema(t, i);
-            m.forEach(x => a.compileMigration(x));
-            console.log('schema compiles:', ddl.length, 'statements,', m.length, 'migrations');
-          "
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning scripts/*.sh scripts/lib/*.sh
 
-      # Boots the server against a throwaway local SQLite file and exercises the
-      # full ingest path, including a real UDP datagram. Catches schema, routing
-      # and listener regressions before they reach Render.
-      - name: Boot + ingest smoke test
-        env:
-          PORT: 3998
-          TURSO_DATABASE_URL: file:./ci.db
-          JWT_SECRET: ci-only-secret-not-used-in-production
-          UDP_ENABLED: 'true'
-          UDP_PORT_RANGE: 10000-10010
-          UDP_MAX_LISTENERS: '1'
-        run: |
-          node src/server.js & echo $! > server.pid
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:3998/healthz > /dev/null && break
-            sleep 1
-          done
-          curl -sf http://localhost:3998/healthz
-          node .github/workflows/smoke.js
-          kill "$(cat server.pid)"
+      # All pipeline logic lives in scripts/ci.sh, so a local run and a CI run
+      # execute exactly the same code: static checks, then the end-to-end suite
+      # (HTTP + OAuth + real UDP datagrams against a throwaway SQLite file).
+      - name: Run CI pipeline
+        run: ./scripts/ci.sh
+
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log
+          path: /tmp/lb-test-server.log
+          if-no-files-found: ignore

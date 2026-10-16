@@ -4,7 +4,16 @@
 /**
  * DESTRUCTIVE: drops every Logbase table and recreates the current schema.
  *
- *   npm run db:reset -- --yes
+ * Low-level implementation — prefer the wrapper, which resolves the target
+ * database and confirms before running:
+ *
+ *   npm run db:reset              local database, prompts
+ *   npm run db:reset -- --yes     local database, no prompt
+ *   npm run db:reset -- --turso   cloud database (requires .env)
+ *
+ * Direct use reads TURSO_DATABASE_URL from the environment:
+ *
+ *   node scripts/db-reset.js --yes
  *
  * Use when a schema change cannot be expressed as a migration, or to clear a
  * development database. All users, logs, collectors and credentials are lost.
@@ -33,7 +42,8 @@ async function main() {
   if (!process.argv.includes('--yes')) {
     console.error('Refusing to run without --yes.\n');
     console.error('This deletes ALL data (users, logs, collectors, credentials).');
-    console.error('Run:  npm run db:reset -- --yes');
+    console.error('Run:  npm run db:reset        (prompts, targets the local database)');
+    console.error('  or: node scripts/db-reset.js --yes');
     process.exit(1);
   }
 

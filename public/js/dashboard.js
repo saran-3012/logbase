@@ -163,6 +163,43 @@ function navigate(view) {
   renderView(view);
 }
 
+/* ── Table viewport sizing ─────────────────────────────────────────────────
+
+   Each table body scrolls inside its own viewport so the column header can
+   stay pinned. The viewport is sized to the space between the top of the
+   table and the bottom of the window, minus whatever sits below it inside the
+   panel (the pager), so that footer stays reachable without scrolling the
+   page. A CSS `calc()` fallback covers the pre-script paint.
+   ────────────────────────────────────────────────────────────────────────── */
+
+const TABLE_GUTTER = 24;
+
+/* Floor for the table viewport. On narrow screens the filters stack and push
+   the table far down the page, leaving almost no room below it; rather than
+   collapse to a sliver we keep a readable height and let the page scroll down
+   to the pager, which is the natural behaviour there anyway. */
+const TABLE_MIN_H = 220;
+
+function sizeTables() {
+  const minH = Math.min(TABLE_MIN_H, Math.round(window.innerHeight * 0.5));
+
+  qsa('.scroll-x').forEach(sx => {
+    const page = sx.closest('.page');
+    if (!page || page.classList.contains('hidden')) return;
+
+    // Distance from the top of the table to the bottom of the window. Reading
+    // the live rect is correct here: `top` is viewport-relative and so is
+    // `innerHeight`, so any current page scroll cancels out.
+    const top = sx.getBoundingClientRect().top;
+    const panel = sx.closest('.panel');
+    const foot = panel?.querySelector('.panel-foot');
+    const footH = foot ? foot.getBoundingClientRect().height : 0;
+
+    const avail = window.innerHeight - top - footH - TABLE_GUTTER;
+    sx.style.setProperty('--table-max', `${Math.max(minH, Math.round(avail))}px`);
+  });
+}
+
 function renderView(view) {
   state.view = view;
 
@@ -181,6 +218,9 @@ function renderView(view) {
     if (view === 'collectors')     { $('view-collectors').classList.remove('hidden'); loadCollectors(); }
     if (view === 'new-collector')  { $('view-new-collector').classList.remove('hidden'); initNewCollector(); }
   }
+
+  // The newly-shown page has its real geometry only after this paint.
+  requestAnimationFrame(sizeTables);
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -368,6 +408,9 @@ function renderLogRows() {
 
   body.innerHTML = html.join('');
   qs('.log-head span:first-child').innerHTML = `Time <span class="mono">(${esc(TZ.split('/').pop())})</span>`;
+
+  // Row count changed, so the panel footer moved; re-measure the viewport.
+  requestAnimationFrame(sizeTables);
 }
 
 function renderPager() {
@@ -655,6 +698,8 @@ function renderCollectorRows() {
         <span>The listener could not bind: <code>${esc(c.listener_status)}</code>. The port may be in use by another process.</span></div>` : ''}
     </div>`;
   }).join('');
+
+  requestAnimationFrame(sizeTables);
 }
 
 /* ── Integration panel ─────────────────────────────────────────────────────── */
@@ -1210,9 +1255,89 @@ async function submitNewCollector(e) {
    EVENT WIRING
    ════════════════════════════════════════════════════════════════════════════ */
 
+/* ── Popup menus ───────────────────────────────────────────────────────────
+
+   Menus render as `position: fixed` so no ancestor scroll container can clip
+   them. That means their coordinates have to be computed from the trigger's
+   viewport rect rather than inherited from an offset parent.
+   ────────────────────────────────────────────────────────────────────────── */
+
+const MENU_GAP = 6;
+const MENU_EDGE = 8;
+
+/** The trigger whose menu is currently open, so we can track it on scroll. */
+let openMenuBtn = null;
+
+/** Place `menu` under `btn`, flipping above and clamping to stay on screen. */
+function positionMenu(btn, menu) {
+  const r = btn.getBoundingClientRect();
+
+  // Measure at natural size; the menu is already visible when this runs.
+  const mw = menu.offsetWidth;
+  const mh = menu.offsetHeight;
+
+  // Prefer below, flip above when the bottom would overflow and there is more
+  // room up top.
+  const below = window.innerHeight - r.bottom - MENU_GAP;
+  const above = r.top - MENU_GAP;
+  const flip  = mh > below && above > below;
+
+  let top = flip ? r.top - MENU_GAP - mh : r.bottom + MENU_GAP;
+  top = Math.max(MENU_EDGE, Math.min(top, window.innerHeight - mh - MENU_EDGE));
+
+  // Right-align with the trigger, then clamp into the viewport.
+  let left = r.right - mw;
+  left = Math.max(MENU_EDGE, Math.min(left, window.innerWidth - mw - MENU_EDGE));
+
+  menu.style.top  = `${Math.round(top)}px`;
+  menu.style.left = `${Math.round(left)}px`;
+}
+
+function openMenu(btn, menu) {
+  closeAllMenus();
+  menu.classList.remove('hidden');
+  positionMenu(btn, menu);
+  btn.setAttribute('aria-expanded', 'true');
+  openMenuBtn = btn;
+}
+
 function closeAllMenus() {
   qsa('.menu').forEach(m => m.classList.add('hidden'));
   qsa('[aria-haspopup="true"]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+  openMenuBtn = null;
+}
+
+/** Toggle `menu` for `btn`; returns true when it ended up open. */
+function toggleMenu(btn, menu) {
+  const willOpen = menu.classList.contains('hidden');
+  if (willOpen) openMenu(btn, menu);
+  else closeAllMenus();
+  return willOpen;
+}
+
+/* A fixed menu does not travel with its trigger, so follow it while anything
+   scrolls (capture catches the inner table viewports too) and on resize. If
+   the trigger has scrolled out of its scroll container, close instead. */
+function trackOpenMenu() {
+  if (!openMenuBtn) return;
+
+  // A re-render (refresh, toggle, poll) detaches the trigger; drop the handle
+  // rather than positioning against an empty rect.
+  if (!openMenuBtn.isConnected) { openMenuBtn = null; return; }
+
+  const menu = openMenuBtn.closest('.menu-wrap')?.querySelector('.menu');
+  if (!menu || menu.classList.contains('hidden')) { openMenuBtn = null; return; }
+
+  const r = openMenuBtn.getBoundingClientRect();
+  const clipper = openMenuBtn.closest('.scroll-x');
+  const hidden = r.bottom < 0 || r.top > window.innerHeight ||
+    (clipper && (() => {
+      const c = clipper.getBoundingClientRect();
+      return r.bottom < c.top || r.top > c.bottom;
+    })());
+
+  if (hidden) closeAllMenus();
+  else positionMenu(openMenuBtn, menu);
 }
 
 function wireGlobal() {
@@ -1234,12 +1359,13 @@ function wireGlobal() {
   // Account menu
   $('account-btn').addEventListener('click', (e) => {
     e.stopPropagation();
-    const menu = $('account-menu');
-    const open = menu.classList.contains('hidden');
-    closeAllMenus();
-    menu.classList.toggle('hidden', !open);
-    $('account-btn').setAttribute('aria-expanded', String(open));
+    toggleMenu($('account-btn'), $('account-menu'));
   });
+
+  // Keep an open fixed menu glued to its trigger. Capture so scrolling inside
+  // the table viewports is seen too, and passive since we never preventDefault.
+  window.addEventListener('scroll', trackOpenMenu, { capture: true, passive: true });
+  window.addEventListener('resize', () => { sizeTables(); trackOpenMenu(); }, { passive: true });
   $('logout-btn').addEventListener('click', logout);
 
   // Modals
@@ -1346,11 +1472,7 @@ function wireCollectors() {
     const menuBtn = e.target.closest('[data-menu]');
     if (menuBtn) {
       e.stopPropagation();
-      const menu = qs(`[data-menu-for="${menuBtn.dataset.menu}"]`);
-      const open = menu.classList.contains('hidden');
-      closeAllMenus();
-      menu.classList.toggle('hidden', !open);
-      menuBtn.setAttribute('aria-expanded', String(open));
+      toggleMenu(menuBtn, qs(`[data-menu-for="${menuBtn.dataset.menu}"]`));
       return;
     }
 

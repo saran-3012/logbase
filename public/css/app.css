@@ -299,7 +299,23 @@ code, pre, .mono { font-family: var(--mono); }
 
 .results-wrap { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
 .results { flex: 999 1 620px; min-width: 0; }
-.scroll-x { overflow-x: auto; }
+
+/* A table viewport that scrolls on both axes.
+   `overflow-x: auto` alone is a trap: per CSS Overflow §3 a `visible` value on
+   one axis computes to `auto` when the other axis is not `visible`, so the
+   element silently becomes a scroll container vertically too. Without a height
+   cap it never actually scrolls, so the page scrolls instead and any sticky
+   header inside resolves against a scrollport that never moves. Capping the
+   height makes the vertical scrolling real and lets the header stick. */
+.scroll-x {
+  overflow: auto;
+  /* `--table-max` is measured per-table by sizeTables() so the pager below
+     stays reachable without scrolling the page. The calc() is the pre-script
+     fallback. Scroll chaining is deliberately left at the default so reaching
+     the end of the list continues scrolling the page. */
+  max-height: var(--table-max, calc(100vh - 248px));
+  min-height: min(220px, 50vh);
+}
 .log-grid { min-width: 720px; }
 
 .log-cols {
@@ -308,10 +324,13 @@ code, pre, .mono { font-family: var(--mono); }
   gap: 16px;
 }
 .log-head {
+  position: sticky; top: 0; z-index: 3;
   padding: 12px 18px; border-bottom: 1px solid var(--line);
+  background: var(--surface);
   font-size: 12px; font-weight: 500; color: var(--muted);
 }
 .log-daysep {
+  position: sticky; top: 41px; z-index: 2;
   padding: 8px 18px; background: var(--surface-2); border-bottom: 1px solid var(--line);
   font-size: 12px; color: var(--muted); font-weight: 500;
 }
@@ -445,7 +464,12 @@ pre.code.lg { font-size: 12.5px; line-height: 1.75; padding: 18px; }
   grid-template-columns: minmax(180px, 1.2fr) 120px 170px minmax(240px, 1.6fr) 130px 130px 44px;
   gap: 16px;
 }
-.col-head { padding: 12px 20px; border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 500; color: var(--muted); }
+.col-head {
+  position: sticky; top: 0; z-index: 3;
+  padding: 12px 20px; border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  font-size: 12px; font-weight: 500; color: var(--muted);
+}
 .col-row { border-bottom: 1px solid #191D23; border-left: 3px solid transparent; }
 .col-row:hover { background: var(--hover); }
 .col-row.sel { background: var(--hover); border-left-color: var(--accent); }
@@ -471,10 +495,19 @@ pre.code.lg { font-size: 12.5px; line-height: 1.75; padding: 18px; }
 .switch[aria-checked="true"] .track i { background: var(--accent-ink); }
 .switch:disabled { opacity: .55; cursor: not-allowed; }
 
-/* Row action menu */
+/* Row action menu.
+
+   Positioned `fixed` and placed by JS rather than `absolute` inside the row.
+   An absolutely-positioned menu is clipped by every scroll container between
+   it and the viewport — here `.panel { overflow: hidden }` and the `.scroll-x`
+   viewport — which cut the menu off mid-item. `fixed` escapes that clipping
+   entirely (no ancestor establishes a containing block via transform/filter),
+   and it also keeps the menu out of the scrollport's scroll height, so opening
+   one no longer grows the table's scrollable area. */
 .menu-wrap { position: relative; }
 .menu {
-  position: absolute; right: 0; top: 40px; z-index: 40; min-width: 184px;
+  position: fixed; z-index: 120; min-width: 184px;
+  max-height: min(60vh, 420px); overflow-y: auto; overscroll-behavior: contain;
   border: 1px solid var(--line-3); border-radius: var(--r-md);
   background: var(--surface-3); padding: 6px;
   box-shadow: 0 12px 32px rgba(0,0,0,.5);

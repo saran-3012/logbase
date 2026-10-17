@@ -111,10 +111,17 @@ else
 fi
 
 # ── 5. Modules load without side effects ──────────────────────────────────────
+# Requiring src/db/database.js constructs the adapter at module scope, so a
+# database URL must be present. An in-memory database keeps this check true to
+# its name: no file is created, nothing to clean up, and a fresh checkout (CI,
+# a new clone, the Docker image) behaves exactly like a developer machine.
+#
+# `env -i` clears the environment so a developer's .env — which points at the
+# *cloud* database — can never be picked up by a static check.
 section "Modules"
-if OUT="$(node -e "
-  process.env.TURSO_DATABASE_URL = process.env.TURSO_DATABASE_URL || 'file:./data/_check.db';
-  process.env.JWT_SECRET = process.env.JWT_SECRET || 'check-only';
+if OUT="$(env -i PATH="$PATH" HOME="$HOME" node -e "
+  process.env.TURSO_DATABASE_URL = ':memory:';
+  process.env.JWT_SECRET = 'check-only';
   const mods = [
     './src/ingest/registry', './src/ingest/formats', './src/ingest/pipeline',
     './src/ingest/listenerManager', './src/middleware/collectorAuth',
@@ -128,7 +135,6 @@ else
   fail_check "A module failed to load"
   printf '%s\n' "$OUT" | sed 's/^/    /' >&2
 fi
-rm -f "$ROOT/data/_check.db" "$ROOT/data/_check.db-shm" "$ROOT/data/_check.db-wal" 2>/dev/null || true
 
 # ── 6. Environment documentation drift ────────────────────────────────────────
 # Every process.env.X read by src/ should appear in .env.example, so a new

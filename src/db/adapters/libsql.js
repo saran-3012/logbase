@@ -1,7 +1,42 @@
 'use strict';
 
+const fs   = require('fs');
+const path = require('path');
 const { createClient } = require('@libsql/client');
 const BaseAdapter = require('./base');
+
+/**
+ * SQLite opens an existing file or creates a new one, but it will not create a
+ * missing parent directory — it fails with SQLITE_CANTOPEN (14). A fresh
+ * checkout, a CI runner and the Docker image all start without `data/`, so
+ * `file:./data/logs.db` would fail there while working fine on a developer
+ * machine that happens to have the directory already.
+ *
+ * Creating the directory here (rather than in each caller) means every entry
+ * point — server, scripts, tests, Docker — behaves the same way.
+ *
+ * Remote URLs (libsql://, https://, wss://) and in-memory databases have no
+ * filesystem path and are left untouched.
+ */
+function ensureLocalDbDirectory(url) {
+  if (!url.startsWith('file:')) return;
+
+  let filePath = url.slice('file:'.length);
+  if (filePath.startsWith('//')) filePath = filePath.slice(2); // file:///abs/path
+  // file::memory: and file::memory:?cache=shared have no directory.
+  if (filePath === '' || filePath.startsWith(':memory:')) return;
+
+  const dir = path.dirname(path.resolve(filePath));
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    // A read-only or permission-denied mount is the operator's call to fix;
+    // surface SQLite's own error rather than masking it with an mkdir failure.
+    if (err.code !== 'EEXIST') {
+      throw new Error(`Cannot create database directory "${dir}": ${err.message}`);
+    }
+  }
+}
 
 /**
  * LibSQL / Turso adapter.
@@ -16,6 +51,7 @@ class LibSQLAdapter extends BaseAdapter {
     if (!url) {
       throw new Error('LibSQLAdapter requires a url (e.g. set TURSO_DATABASE_URL in your environment)');
     }
+    ensureLocalDbDirectory(url);
     this.client = createClient({ url, authToken });
   }
 

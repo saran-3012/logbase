@@ -9,7 +9,7 @@ const registry        = require('../ingest/registry');
 const listenerManager = require('../ingest/listenerManager');
 const {
   SelectQuery, InsertQuery, UpdateQuery, DeleteQuery,
-  eq, and, col, aliasExpr, rawExpr,
+  eq, gt, and, col, aliasExpr, rawExpr,
 } = require('../db/query');
 
 const router = express.Router();
@@ -28,6 +28,35 @@ async function findOwned(id, userId) {
   return db.query(
     new SelectQuery('collectors').where(and(eq('id', id), eq('user_id', userId))).single()
   );
+}
+
+/**
+ * Live refresh-token summary for an OAuth collector — drives the dashboard
+ * readout ("1 active refresh token, last used 3m ago").
+ */
+async function refreshTokenSummary(collectorId) {
+  const row = await db.query(
+    new SelectQuery('oauth_refresh_tokens')
+      .columns([
+        aliasExpr(rawExpr('COUNT(*)'), 'active'),
+        aliasExpr(rawExpr('MAX(last_used_at)'), 'last_used_at'),
+        aliasExpr(rawExpr('MIN(expires_at)'), 'expires_at'),
+        aliasExpr(rawExpr('SUM(reuse_count)'), 'uses'),
+      ])
+      .where(and(
+        eq('collector_id', collectorId),
+        eq('revoked', 0),
+        gt('expires_at', Math.floor(Date.now() / 1000)),
+      ))
+      .single()
+  );
+
+  return {
+    active:       Number(row?.active || 0),
+    uses:         Number(row?.uses || 0),
+    last_used_at: row?.last_used_at != null ? Number(row.last_used_at) : null,
+    expires_at:   row?.expires_at   != null ? Number(row.expires_at)   : null,
+  };
 }
 
 async function credentialsFor(collectorId) {
@@ -65,6 +94,8 @@ function serialise(collector, req, extra = {}) {
     transfer_type:    collector.transfer_type,
     auth_method:      collector.auth_method,
     input_format:     collector.input_format,
+    // null for non-OAuth collectors; 'rotating' | 'static' otherwise.
+    oauth_refresh_mode: registry.refreshModeOf(collector),
     enabled:          Boolean(Number(collector.enabled)),
     bind_host:        collector.bind_host,
     public_host:      collector.public_host,
@@ -86,6 +117,11 @@ router.get('/capabilities', sessionAuth, wrap(async (req, res) => {
   const cfg = listenerManager.config;
   res.json({
     ...registry.capabilitiesPayload(),
+    oauth: {
+      access_token_ttl:         parseInt(process.env.OAUTH_ACCESS_TOKEN_TTL, 10) || 3600,
+      refresh_token_ttl:        parseInt(process.env.OAUTH_REFRESH_TOKEN_TTL, 10) || 2592000,
+      static_refresh_token_ttl: parseInt(process.env.OAUTH_STATIC_REFRESH_TOKEN_TTL, 10) || 7776000,
+    },
     udp: {
       enabled:             cfg.enabled,
       max_listeners:       cfg.maxListeners,
@@ -107,7 +143,11 @@ router.get('/', sessionAuth, wrap(async (req, res) => {
 
   const result = [];
   for (const row of rows) {
-    result.push(serialise(row, req, { credentials: await credentialsFor(row.id) }));
+    const extra = { credentials: await credentialsFor(row.id) };
+    if (registry.usesRefreshMode(row.auth_method)) {
+      extra.refresh_tokens = await refreshTokenSummary(row.id);
+    }
+    result.push(serialise(row, req, extra));
   }
   res.json(result);
 }));
@@ -117,6 +157,7 @@ router.post('/', sessionAuth, wrap(async (req, res) => {
   const {
     name, transfer_type: transferType, auth_method: authMethod,
     input_format: inputFormat, public_host: publicHost, port,
+    oauth_refresh_mode: refreshMode,
   } = req.body || {};
 
   if (!name || typeof name !== 'string' || !name.trim()) {
@@ -125,6 +166,9 @@ router.post('/', sessionAuth, wrap(async (req, res) => {
 
   const check = registry.validateCombination(transferType, authMethod, inputFormat);
   if (!check.ok) return res.status(400).json({ error: check.error });
+
+  const resolvedMode = registry.resolveRefreshMode(authMethod, refreshMode);
+  if (!resolvedMode.ok) return res.status(400).json({ error: resolvedMode.error });
 
   const cap = registry.capabilityOf(transferType);
   const userId = req.user.userId;
@@ -170,6 +214,7 @@ router.post('/', sessionAuth, wrap(async (req, res) => {
         transfer_type: transferType,
         auth_method:   authMethod,
         input_format:  inputFormat,
+        oauth_refresh_mode: resolvedMode.mode,
         enabled:       1,
         bind_host:     cap.requiresPort ? listenerManager.config.bindHost : null,
         public_host:   publicHost ? String(publicHost).trim() : null,
@@ -269,6 +314,25 @@ router.patch('/:id', sessionAuth, wrap(async (req, res) => {
     updates.public_host = body.public_host ? String(body.public_host).trim() : null;
   }
 
+  // Refresh mode is the one auth setting that can be changed in place — it
+  // alters how tokens are redeemed, not the credential itself.
+  let refreshModeChange = null;
+  if (body.oauth_refresh_mode !== undefined) {
+    if (!registry.usesRefreshMode(collector.auth_method)) {
+      return res.status(400).json({
+        error: `oauth_refresh_mode only applies to collectors using OAuth client credentials. This collector uses "${collector.auth_method}".`,
+      });
+    }
+    const resolved = registry.resolveRefreshMode(collector.auth_method, body.oauth_refresh_mode);
+    if (!resolved.ok) return res.status(400).json({ error: resolved.error });
+
+    const current = registry.refreshModeOf(collector);
+    if (resolved.mode !== current) {
+      updates.oauth_refresh_mode = resolved.mode;
+      refreshModeChange = { from: current, to: resolved.mode };
+    }
+  }
+
   if (body.port !== undefined && cap.requiresPort) {
     const nextPort = parseInt(body.port, 10);
     if (!Number.isInteger(nextPort)) return res.status(400).json({ error: 'port must be an integer' });
@@ -307,6 +371,20 @@ router.patch('/:id', sessionAuth, wrap(async (req, res) => {
     throw err;
   }
 
+  // Outstanding refresh tokens carry the mode they were issued under, so a
+  // mode switch would otherwise leave old-semantics tokens circulating
+  // indefinitely. Revoking them forces one clean re-authentication via
+  // client_credentials, after which every token follows the new mode.
+  let revokedTokens = 0;
+  if (refreshModeChange) {
+    const result = await db.query(
+      new UpdateQuery('oauth_refresh_tokens')
+        .set({ revoked: 1 })
+        .where(and(eq('collector_id', id), eq('revoked', 0)))
+    );
+    revokedTokens = Number(result?.changes || 0);
+  }
+
   let updated = await findOwned(id, req.user.userId);
 
   // Re-bind when the collector should be running.
@@ -324,7 +402,21 @@ router.patch('/:id', sessionAuth, wrap(async (req, res) => {
     }
   }
 
-  res.json(serialise(updated, req));
+  const extra = {};
+  if (registry.usesRefreshMode(updated.auth_method)) {
+    extra.refresh_tokens = await refreshTokenSummary(id);
+  }
+  if (refreshModeChange) {
+    extra.refresh_mode_change = {
+      ...refreshModeChange,
+      revoked_tokens: revokedTokens,
+      message: revokedTokens > 0
+        ? `Switched to ${refreshModeChange.to} refresh tokens. ${revokedTokens} outstanding refresh token${revokedTokens === 1 ? '' : 's'} were revoked — clients must re-authenticate with client_credentials.`
+        : `Switched to ${refreshModeChange.to} refresh tokens.`,
+    };
+  }
+
+  res.json(serialise(updated, req, extra));
 }));
 
 /* ── POST /collectors/:id/rotate ────────────────────────────────────────────── */
@@ -340,6 +432,19 @@ router.post('/:id/rotate', sessionAuth, wrap(async (req, res) => {
   }
 
   await db.query(new DeleteQuery('collector_credentials').where(eq('collector_id', id)));
+
+  // Refresh tokens are redeemed against the collector, not the client secret,
+  // so they would survive a rotation and keep minting access tokens for the
+  // credential the user just retired. Revoke them with the secret.
+  let revokedTokens = 0;
+  if (registry.usesRefreshMode(collector.auth_method)) {
+    const result = await db.query(
+      new UpdateQuery('oauth_refresh_tokens')
+        .set({ revoked: 1 })
+        .where(and(eq('collector_id', id), eq('revoked', 0)))
+    );
+    revokedTokens = Number(result?.changes || 0);
+  }
 
   const secrets = {};
   if (collector.auth_method === 'api_token') {
@@ -363,7 +468,11 @@ router.post('/:id/rotate', sessionAuth, wrap(async (req, res) => {
     secrets.client_secret = clientSecret;
   }
 
-  res.json({ message: 'Credentials rotated. The previous credentials are now invalid.', secrets });
+  const message = revokedTokens > 0
+    ? `Credentials rotated. The previous credentials are now invalid, and ${revokedTokens} outstanding refresh token${revokedTokens === 1 ? ' was' : 's were'} revoked.`
+    : 'Credentials rotated. The previous credentials are now invalid.';
+
+  res.json({ message, secrets, revoked_refresh_tokens: revokedTokens });
 }));
 
 /* ── POST /collectors/:id/test ──────────────────────────────────────────────── */

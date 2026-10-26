@@ -32,6 +32,10 @@ services:
         value: "3600"
       - key: OAUTH_REFRESH_TOKEN_TTL
         value: "2592000"
+      # Static refresh tokens are reused rather than replaced, so they are
+      # longer-lived by default (90 days).
+      - key: OAUTH_STATIC_REFRESH_TOKEN_TTL
+        value: "7776000"
       - key: DB_ADAPTER
         value: libsql
       - key: TURSO_DATABASE_URL

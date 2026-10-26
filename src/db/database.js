@@ -49,10 +49,15 @@ async function init() {
   }
   const currentVersion = versionRow ? Number(versionRow.version) : 0;
 
+  // Some migrations must branch on the live schema (e.g. additive columns that
+  // should be skipped on a fresh database, where compileSchema() creates the
+  // table complete). Snapshot once, then refresh after each applied migration.
+  let schemaSnapshot = await db.describeSchema();
+
   // Apply any migrations not yet applied (skip version 1 — baseline only)
   for (let i = currentVersion; i < migrations.length; i++) {
     const migration = migrations[i];
-    const stmts = db.compileMigration(migration);
+    const stmts = db.compileMigration(migration, schemaSnapshot);
     if (stmts.length > 0) {
       await db.transaction(async (ctx) => {
         for (const sql of stmts) {
@@ -61,6 +66,7 @@ async function init() {
         await ctx.query(new UpdateQuery('_schema_version').set({ version: i + 1 }));
       });
       console.log(`[db] Applied migration v${i + 1}: ${migration.description || migration.type}`);
+      schemaSnapshot = await db.describeSchema();
     } else {
       // Baseline marker — just bump the version
       await db.query(new UpdateQuery('_schema_version').set({ version: i + 1 }));

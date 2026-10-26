@@ -253,14 +253,82 @@ class LibSQLAdapter extends BaseAdapter {
   }
 
   /**
-   * Compile a structured migration operation into LibSQL/SQLite DDL strings.
-   * Supported types: addColumn, addIndex, dropIndex, renameColumn, dropTable, raw.
-   * Baseline-only entries (no type field) return an empty array.
+   * Current table → column-name map, read from SQLite's own catalogue.
+   * Used by migrations that must branch on the live schema shape.
    */
-  compileMigration(migration) {
+  async describeSchema() {
+    const tables = await this.all(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+    );
+    const schema = new Map();
+    for (const { name } of tables) {
+      // PRAGMA cannot be parameterised; the name comes from sqlite_master, not user input.
+      const cols = await this.all(`PRAGMA table_info("${String(name).replace(/"/g, '""')}")`);
+      schema.set(String(name), new Set(cols.map(c => String(c.name))));
+    }
+    return schema;
+  }
+
+  /** Render a single `ALTER TABLE … ADD COLUMN` clause body. */
+  _columnClause(col) {
+    const parts = [col.type.toUpperCase()];
+    if (col.notNull && col.default === undefined) {
+      throw new Error(`addColumn "${col.name}": NOT NULL column requires a default for existing rows`);
+    }
+    if (col.notNull) parts.push('NOT NULL');
+    if (col.default !== undefined) parts.push(`DEFAULT (${this._defaultLiteral(col.default)})`);
+    if (col.references) {
+      const ref = col.references;
+      parts.push(`REFERENCES ${ref.table}(${ref.column}) ON DELETE ${ref.onDelete}`);
+    }
+    return parts.join(' ');
+  }
+
+  /**
+   * Compile a structured migration operation into LibSQL/SQLite DDL strings.
+   * Supported types: addColumn, guardedColumns, addIndex, dropIndex,
+   * renameColumn, dropTable, raw.
+   * Baseline-only entries (no type field) return an empty array.
+   *
+   * @param {object} migration
+   * @param {Map<string, Set<string>>} [schema]  — from describeSchema(); required
+   *                                               for introspection-based types
+   */
+  compileMigration(migration, schema) {
     if (!migration.type) return []; // baseline marker, nothing to run
 
     switch (migration.type) {
+      case 'guardedColumns': {
+        // Additive columns applied only where they are genuinely missing.
+        //
+        // Migrations run before compileSchema(), so on a fresh database the
+        // target tables do not exist yet — and they will be created complete.
+        // Skipping absent tables makes this migration a no-op there, while an
+        // already-deployed database gets exactly the columns it lacks.
+        if (!schema) throw new Error('guardedColumns migration requires a schema snapshot');
+        if (!Array.isArray(migration.columns) || migration.columns.length === 0) {
+          throw new Error('guardedColumns migration requires a non-empty "columns" array');
+        }
+
+        const stmts = [];
+        const touched = new Set();
+
+        for (const entry of migration.columns) {
+          const existing = schema.get(entry.table);
+          touched.add(entry.table);
+          if (!existing) continue;                       // fresh DB — compileSchema() handles it
+          if (existing.has(entry.column.name)) continue; // already applied
+          stmts.push(
+            `ALTER TABLE ${entry.table} ADD COLUMN ${entry.column.name} ${this._columnClause(entry.column)}`
+          );
+        }
+
+        // Follow-up data statements are only safe once every table they touch exists.
+        const allPresent = [...touched].every(t => schema.has(t));
+        if (allPresent && Array.isArray(migration.then)) stmts.push(...migration.then);
+
+        return stmts;
+      }
       case 'raw': {
         // Escape hatch for dialect-specific / destructive operations that have no
         // neutral representation (dropping FTS triggers, rebuilding tables, …).
@@ -273,18 +341,7 @@ class LibSQLAdapter extends BaseAdapter {
         return [`DROP TABLE IF EXISTS ${migration.table}`];
       case 'addColumn': {
         const col = migration.column;
-        const parts = [col.type.toUpperCase()];
-        if (col.notNull && col.default === undefined)
-          throw new Error(`addColumn "${col.name}": NOT NULL column requires a default for existing rows`);
-        if (col.notNull)    parts.push('NOT NULL');
-        if (col.default !== undefined) {
-          parts.push(`DEFAULT (${this._defaultLiteral(col.default)})`);
-        }
-        if (col.references) {
-          const ref = col.references;
-          parts.push(`REFERENCES ${ref.table}(${ref.column}) ON DELETE ${ref.onDelete}`);
-        }
-        return [`ALTER TABLE ${migration.table} ADD COLUMN ${col.name} ${parts.join(' ')}`];
+        return [`ALTER TABLE ${migration.table} ADD COLUMN ${col.name} ${this._columnClause(col)}`];
       }
       case 'addIndex':
         return [`CREATE INDEX IF NOT EXISTS ${migration.name} ON ${migration.table}(${migration.columns.join(', ')})`];

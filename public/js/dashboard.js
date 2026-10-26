@@ -50,7 +50,13 @@ const state = {
   revealSecret: false,
   testResult:   null,   // { collectorId, ok, message } — survives list refreshes
   // new collector
-  draft: { transfer_type: 'http', auth_method: '', input_format: 'json_array', port: null },
+  draft: {
+    transfer_type: 'http',
+    auth_method: '',
+    input_format: 'json_array',
+    oauth_refresh_mode: 'rotating',
+    port: null,
+  },
 };
 
 /* ── DOM helpers ───────────────────────────────────────────────────────────── */
@@ -639,6 +645,25 @@ function warnIcon() {
   return `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#F5A524" stroke-width="2" stroke-linecap="round"><path d="M12 3 2 20h20L12 3z"></path><path d="M12 10v4M12 17h.01"></path></svg>`;
 }
 
+/* ── Refresh-mode labels ───────────────────────────────────────────────────
+   Served by /collectors/capabilities; the literals are the fallback for a
+   render that happens before capabilities have loaded.
+   ────────────────────────────────────────────────────────────────────────── */
+
+function refreshModeShort(mode) {
+  return state.capabilities?.oauthRefreshModes?.[mode]?.short
+    || (mode === 'static' ? 'static' : 'rotating');
+}
+
+function refreshModeLabel(mode) {
+  return state.capabilities?.oauthRefreshModes?.[mode]?.label
+    || (mode === 'static' ? 'Static refresh token' : 'Rotating refresh tokens');
+}
+
+function refreshModeTitle(mode) {
+  return state.capabilities?.oauthRefreshModes?.[mode]?.description || refreshModeLabel(mode);
+}
+
 function renderCollectorRows() {
   const el = $('collector-rows');
 
@@ -665,7 +690,9 @@ function renderCollectorRows() {
         </div>
         <span><span class="tag">${esc(c.transfer_type)}</span></span>
         <div style="font-size:13px;line-height:1.4">
-          <div>${esc(auth)}</div>
+          <div>${esc(auth)}${c.oauth_refresh_mode
+            ? ` <span class="tag sm" title="${esc(refreshModeTitle(c.oauth_refresh_mode))}">${esc(refreshModeShort(c.oauth_refresh_mode))}</span>`
+            : ''}</div>
           <div class="mut">${esc(fmt)}</div>
         </div>
         <div class="endpoint">
@@ -688,6 +715,7 @@ function renderCollectorRows() {
             <button type="button" role="menuitem" data-act="integrate" data-id="${c.id}">Integration &amp; snippets</button>
             ${c.transfer_type === 'udp' ? `<button type="button" role="menuitem" data-act="test" data-id="${c.id}">Send test event</button>` : ''}
             ${c.auth_method !== 'none' ? `<button type="button" role="menuitem" data-act="rotate" data-id="${c.id}">Rotate credentials</button>` : ''}
+            ${c.oauth_refresh_mode ? `<button type="button" role="menuitem" data-act="refresh-mode" data-id="${c.id}">Switch to ${esc(refreshModeShort(c.oauth_refresh_mode === 'static' ? 'rotating' : 'static'))} refresh</button>` : ''}
             <button type="button" role="menuitem" data-act="logs" data-id="${c.id}">View its logs</button>
             <hr />
             <button type="button" role="menuitem" class="danger" data-act="delete" data-id="${c.id}">Delete collector</button>
@@ -739,10 +767,32 @@ function renderIntegration() {
   $('int-security').innerHTML = c.auth_method === 'none'
     ? `UDP ingestion is <strong style="color:var(--warn-fg);font-weight:500">unauthenticated and unencrypted</strong> — anyone who can reach
        <code class="mono">${esc(c.endpoint || '')}</code> can write to this collector. Restrict access with your firewall.`
-    : `Keep the credential secret — anyone with it can write to this collector.
+    : `${refreshBlurb(c)}Keep the credential secret — anyone with it can write to this collector.
        <button type="button" class="btn-link" data-act="rotate" data-id="${c.id}" style="padding:0">Rotate credentials</button>`;
 
   renderTestResult(c);
+}
+
+/**
+ * Refresh-token status line in the integration sidebar: which mode is active,
+ * how many refresh tokens are live, and a one-click switch to the other mode.
+ */
+function refreshBlurb(c) {
+  if (!c.oauth_refresh_mode) return '';
+
+  const t     = c.refresh_tokens || {};
+  const other = c.oauth_refresh_mode === 'static' ? 'rotating' : 'static';
+
+  const live = t.active > 0
+    ? `${t.active} active refresh token${t.active === 1 ? '' : 's'}${t.last_used_at ? `, last used ${esc(relTime(t.last_used_at * 1000))}` : ''}.`
+    : 'No refresh token has been issued yet — call <code class="mono">/oauth/token</code> with <code class="mono">grant_type=client_credentials</code>.';
+
+  return `<div style="margin-bottom:10px">
+    <strong style="color:var(--text);font-weight:500">${esc(refreshModeLabel(c.oauth_refresh_mode))}</strong> ·
+    ${esc(refreshModeTitle(c.oauth_refresh_mode))}<br />
+    ${live}
+    <button type="button" class="btn-link" data-act="refresh-mode" data-id="${c.id}" style="padding:0">Switch to ${esc(refreshModeShort(other))}</button>
+  </div>`;
 }
 
 /**
@@ -868,13 +918,26 @@ sock.close()`;
   const headerValue = isOAuth ? 'Bearer <ACCESS_TOKEN>' : secret;
 
   if (lang === 'curl') {
-    const oauthStep = isOAuth ? `# 1 — exchange client credentials for an access token (valid 1 hour)
+    const oauthStep = isOAuth ? `# 1 — exchange client credentials for an access token
 curl -X POST ${window.location.origin}/oauth/token \\
   -H "Content-Type: application/x-www-form-urlencoded" \\
   -d "grant_type=client_credentials&client_id=${secret}&client_secret=<CLIENT_SECRET>"
 
+# → { "access_token": "…", "expires_in": ${state.capabilities?.oauth?.access_token_ttl || 3600}, "refresh_token": "…",
+#     "refresh_token_mode": "${c.oauth_refresh_mode || 'rotating'}" }
+
 # 2 — push a batch
 ` : '';
+
+    const refreshStep = isOAuth ? `
+
+# 3 — when the access token expires, redeem the refresh token
+curl -X POST ${window.location.origin}/oauth/token \\
+  -H "Content-Type: application/x-www-form-urlencoded" \\
+  -d "grant_type=refresh_token&refresh_token=<REFRESH_TOKEN>"
+${c.oauth_refresh_mode === 'static'
+      ? '# Static mode: the same refresh token is returned — store it once and reuse it.'
+      : '# Rotating mode: a NEW refresh token comes back each time. Persist it and\n# discard the old one — replaying a consumed token revokes the whole family.'}` : '';
 
     return `${oauthStep}curl -X POST ${url} \\
   -H "Content-Type: ${contentType}" \\
@@ -884,7 +947,7 @@ curl -X POST ${window.location.origin}/oauth/token \\
 # → { "ok": true, "inserted": 2, "rejected": 0 }
 # This collector expects "${format}"${format === 'json_array'
       ? ' — send a JSON array; each element is one event.'
-      : ' — send one JSON object per line.'}`;
+      : ' — send one JSON object per line.'}${refreshStep}`;
   }
 
   if (lang === 'node') {
@@ -969,6 +1032,42 @@ async function deleteCollector(id) {
   } catch (err) { toast(err.message, 'err'); }
 }
 
+/**
+ * Flip a collector between rotating and static refresh tokens.
+ *
+ * The server revokes every outstanding refresh token on a mode change — a
+ * token issued under the old mode keeps the old redemption semantics — so the
+ * confirmation has to state that clients must re-authenticate.
+ */
+async function switchRefreshMode(id) {
+  const c = state.collectors.find(x => x.id === Number(id));
+  if (!c || !c.oauth_refresh_mode) return;
+
+  const next   = c.oauth_refresh_mode === 'static' ? 'rotating' : 'static';
+  const active = c.refresh_tokens?.active || 0;
+
+  const consequence = active > 0
+    ? `${active} outstanding refresh token${active === 1 ? '' : 's'} will be revoked, so every client must re-authenticate with client_credentials once.`
+    : 'No refresh tokens are currently outstanding, so nothing in flight is affected.';
+
+  const risk = next === 'static'
+    ? ' A static refresh token is reusable until it expires, which means a leaked token keeps working and replay cannot be detected.'
+    : ' Each refresh will return a new token and replaying a consumed one revokes the whole family.';
+
+  const ok = await confirmDialog(
+    `Switch “${c.name}” to ${refreshModeShort(next)} refresh tokens?`,
+    consequence + risk,
+    `Switch to ${refreshModeShort(next)}`
+  );
+  if (!ok) return;
+
+  try {
+    const res = await api('PATCH', `/collectors/${id}`, { oauth_refresh_mode: next });
+    toast(res.refresh_mode_change?.message || `Switched to ${next} refresh tokens`, 'ok', 8000);
+    await loadCollectors();
+  } catch (err) { toast(err.message, 'err', 9000); }
+}
+
 async function rotateCollector(id) {
   const c = state.collectors.find(x => x.id === Number(id));
   if (!c) return;
@@ -1050,6 +1149,9 @@ async function initNewCollector() {
 
   const cap = capOf(state.draft.transfer_type) || first;
   state.draft.auth_method  = cap.authMethods[0];
+  if (!caps.oauthRefreshModes?.[state.draft.oauth_refresh_mode]) {
+    state.draft.oauth_refresh_mode = caps.defaultRefreshMode || 'rotating';
+  }
   state.draft.input_format = cap.inputFormats.includes(state.draft.input_format)
     ? state.draft.input_format : cap.inputFormats[0];
   if (cap.requiresPort && !state.draft.port) state.draft.port = caps.udp?.port_range?.min ?? 10000;
@@ -1126,6 +1228,9 @@ function renderNewCollector() {
     </div>`;
   }
 
+  /* Refresh tokens — only meaningful for OAuth client credentials */
+  renderRefreshChoices();
+
   /* Format */
   const formats = cap?.inputFormats || [];
   if (!formats.includes(d.input_format)) d.input_format = formats[0];
@@ -1156,6 +1261,71 @@ function renderNewCollector() {
   renderPreview();
 }
 
+/**
+ * Refresh-token mode picker.
+ *
+ * Only meaningful for OAuth client credentials — API tokens never expire and
+ * UDP has no credential at all, so the whole section is hidden otherwise.
+ */
+function renderRefreshChoices() {
+  const caps    = state.capabilities;
+  const d       = state.draft;
+  const section = $('nc-refresh');
+  if (!section) return;
+
+  const applies = d.auth_method === 'oauth_client_credentials';
+  section.classList.toggle('hidden', !applies);
+  if (!applies) return;
+
+  const modes = caps?.oauthRefreshModes || {};
+  const keys  = Object.keys(modes);
+  if (!keys.length) { section.classList.add('hidden'); return; }
+  if (!keys.includes(d.oauth_refresh_mode)) {
+    d.oauth_refresh_mode = caps?.defaultRefreshMode || keys[0];
+  }
+
+  $('nc-refresh-choices').innerHTML = keys.map(k => {
+    const m  = modes[k];
+    const on = k === d.oauth_refresh_mode;
+    return `<label class="choice${on ? ' on' : ''}" data-refresh="${k}">
+      <input type="radio" name="nc-refresh" value="${k}" ${on ? 'checked' : ''} />
+      <span class="top"><span class="radio" aria-hidden="true"><i></i></span>
+      <span><b>${esc(m.label)}${m.recommended ? ' <span class="soft">· recommended</span>' : ''}</b>
+      <span class="desc">${esc(m.description)}</span></span></span>
+      <code>expires in ${esc(ttlLabel(refreshTtl(k)))}</code>
+    </label>`;
+  }).join('');
+
+  $('nc-refresh-note').innerHTML = d.oauth_refresh_mode === 'static'
+    ? `<div class="note note-warn" role="note">${warnIcon()}
+        <span>A static refresh token stays valid until it expires or you revoke it, so a leaked token keeps working — there is no replay detection. Prefer rotating unless the client cannot persist a changing credential.</span></div>`
+    : '';
+}
+
+/** Configured refresh-token lifetime, in seconds, for a mode. */
+function refreshTtl(mode) {
+  const o = state.capabilities?.oauth;
+  if (!o) return mode === 'static' ? 7776000 : 2592000;
+  return mode === 'static' ? o.static_refresh_token_ttl : o.refresh_token_ttl;
+}
+
+/** Humanise a duration in seconds: 2592000 → "30 days". */
+function ttlLabel(seconds) {
+  const s = Number(seconds) || 0;
+  const units = [
+    ['day',    86400],
+    ['hour',   3600],
+    ['minute', 60],
+  ];
+  for (const [name, size] of units) {
+    if (s >= size) {
+      const n = Math.round(s / size);
+      return `${n} ${name}${n === 1 ? '' : 's'}`;
+    }
+  }
+  return `${s} seconds`;
+}
+
 function lockIcon() {
   return `<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#98A2AE" stroke-width="2" stroke-linecap="round" style="flex:0 0 auto;margin-top:1px"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 7.5-2"></path></svg>`;
 }
@@ -1178,15 +1348,24 @@ function renderPreview() {
   $('pv-auth').textContent     = caps?.authMethods[d.auth_method] || d.auth_method || '—';
   $('pv-format').textContent   = (FORMAT_TITLE[d.input_format] || [d.input_format])[0];
 
+  const isOAuth = d.auth_method === 'oauth_client_credentials';
+  $('pv-refresh-dt').classList.toggle('hidden', !isOAuth);
+  $('pv-refresh').classList.toggle('hidden', !isOAuth);
+  if (isOAuth) {
+    const m = caps?.oauthRefreshModes?.[d.oauth_refresh_mode];
+    $('pv-refresh').textContent = `${m?.short || d.oauth_refresh_mode} · ${ttlLabel(refreshTtl(d.oauth_refresh_mode))}`;
+  }
+
   const sec = $('pv-security');
   sec.textContent = isUdp ? 'Unencrypted · unauthenticated' : 'TLS encrypted · credential required';
   sec.style.color = isUdp ? 'var(--warn-fg)' : 'var(--text)';
   $('pv-token-note').textContent = isUdp ? '' : ', your credential';
 
   const preview = {
-    transfer_type: d.transfer_type,
-    input_format:  d.input_format,
-    auth_method:   d.auth_method,
+    transfer_type:      d.transfer_type,
+    input_format:       d.input_format,
+    auth_method:        d.auth_method,
+    oauth_refresh_mode: isOAuth ? d.oauth_refresh_mode : null,
     endpoint,
     name,
     credentials: [],
@@ -1217,6 +1396,10 @@ async function submitNewCollector(e) {
     input_format:  d.input_format,
   };
 
+  if (d.auth_method === 'oauth_client_credentials') {
+    payload.oauth_refresh_mode = d.oauth_refresh_mode;
+  }
+
   if (cap?.requiresPort) {
     const port = parseInt($('nc-port').value, 10);
     if (!Number.isInteger(port)) {
@@ -1235,7 +1418,13 @@ async function submitNewCollector(e) {
     const created = await api('POST', '/collectors', payload);
     state.collectors = [];
     state.intCollector = created.id;
-    state.draft = { transfer_type: 'http', auth_method: '', input_format: 'json_array', port: null };
+    state.draft = {
+      transfer_type: 'http',
+      auth_method: '',
+      input_format: 'json_array',
+      oauth_refresh_mode: state.capabilities?.defaultRefreshMode || 'rotating',
+      port: null,
+    };
     $('nc-name').value = ''; $('nc-host').value = ''; $('nc-port').value = '';
 
     if (created.secrets && Object.keys(created.secrets).length) {
@@ -1492,6 +1681,7 @@ function wireCollectors() {
           await testCollector(id);
           break;
         case 'rotate': await rotateCollector(id); break;
+        case 'refresh-mode': await switchRefreshMode(id); break;
         case 'delete': await deleteCollector(id); break;
         case 'logs':
           state.collector = String(id);
@@ -1503,10 +1693,13 @@ function wireCollectors() {
     }
   });
 
-  // The security blurb hosts a rotate shortcut too.
+  // The security blurb hosts rotate / switch-mode shortcuts too.
   $('int-security').addEventListener('click', async (e) => {
-    const act = e.target.closest('[data-act="rotate"]');
-    if (act) await rotateCollector(Number(act.dataset.id));
+    const act = e.target.closest('[data-act]');
+    if (!act) return;
+    const id = Number(act.dataset.id);
+    if (act.dataset.act === 'rotate')       await rotateCollector(id);
+    if (act.dataset.act === 'refresh-mode') await switchRefreshMode(id);
   });
 
   $('int-select').addEventListener('change', () => {
@@ -1551,8 +1744,9 @@ function wireNewCollector() {
       $('nc-port').value = '';
       renderNewCollector();
     }
-    if (t.name === 'nc-auth')   { state.draft.auth_method  = t.value; renderNewCollector(); }
-    if (t.name === 'nc-format') { state.draft.input_format = t.value; renderNewCollector(); }
+    if (t.name === 'nc-auth')    { state.draft.auth_method  = t.value; renderNewCollector(); }
+    if (t.name === 'nc-format')  { state.draft.input_format = t.value; renderNewCollector(); }
+    if (t.name === 'nc-refresh') { state.draft.oauth_refresh_mode = t.value; renderNewCollector(); }
   });
 
   ['nc-name', 'nc-host', 'nc-port'].forEach(id =>

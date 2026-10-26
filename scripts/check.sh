@@ -101,7 +101,17 @@ if OUT="$(node -e "
   const Adapter = require('./src/db/adapters/libsql');
   const a = Object.create(Adapter.prototype);
   const ddl = a.compileSchema(t, i);
-  m.forEach(x => a.compileMigration(x));
+
+  // Introspection-based migrations (guardedColumns) branch on the live schema,
+  // so compile them against both shapes they must handle:
+  //   fresh  — no tables yet; compileSchema() will create them complete
+  //   legacy — every table present but missing the newest columns
+  const fresh = new Map();
+  const legacy = new Map(
+    t.map(tb => [tb.name, new Set(tb.columns.map(c => c.name))])
+  );
+  for (const x of m) { a.compileMigration(x, fresh); a.compileMigration(x, legacy); }
+
   console.log(ddl.length + ' DDL statements, ' + m.length + ' migrations');
 " 2>&1)"; then
   say "Schema compiles — $OUT"

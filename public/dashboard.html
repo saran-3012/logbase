@@ -344,6 +344,12 @@
           <div id="nc-auth-readout"></div>
         </section>
 
+        <fieldset id="nc-refresh" class="hidden" style="margin:0;padding:22px 24px;border:0;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:12px">
+          <legend class="legend" style="padding:0;margin-bottom:12px">Refresh tokens</legend>
+          <div class="choices" id="nc-refresh-choices"></div>
+          <div id="nc-refresh-note"></div>
+        </fieldset>
+
         <fieldset style="margin:0;padding:22px 24px;border:0;border-bottom:1px solid var(--line)">
           <legend class="legend" style="padding:0;margin-bottom:12px">Payload format</legend>
           <div class="choices" id="nc-formats"></div>
@@ -382,6 +388,7 @@
           <dl class="kv" style="padding:16px 18px">
             <dt>Endpoint</dt><dd class="mono" id="pv-endpoint">—</dd>
             <dt>Auth</dt><dd id="pv-auth">—</dd>
+            <dt class="hidden" id="pv-refresh-dt">Refresh</dt><dd class="hidden" id="pv-refresh">—</dd>
             <dt>Format</dt><dd id="pv-format">—</dd>
             <dt>Security</dt><dd id="pv-security">—</dd>
           </dl>

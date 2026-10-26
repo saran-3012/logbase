@@ -19,6 +19,7 @@
       { "name": "transfer_type",   "type": "text",    "notNull": true },
       { "name": "auth_method",     "type": "text",    "notNull": true },
       { "name": "input_format",    "type": "text",    "notNull": true, "default": "json_array" },
+      { "name": "oauth_refresh_mode", "type": "text", "comment": "'rotating' | 'static'. NULL for collectors that do not use OAuth. NULL on an OAuth collector is read as 'rotating'." },
       { "name": "enabled",         "type": "integer", "notNull": true, "default": 1 },
       { "name": "bind_host",       "type": "text" },
       { "name": "public_host",     "type": "text" },
@@ -66,14 +67,16 @@
   },
   {
     "name": "oauth_refresh_tokens",
-    "comment": "token_hash stores SHA-256 of the actual token — never the plain text. reuse_count detects stolen token families.",
+    "comment": "token_hash stores SHA-256 of the actual token — never the plain text. In 'rotating' mode reuse_count flags a replayed (possibly stolen) token; in 'static' mode the same token is presented repeatedly by design, so reuse_count is simply a usage counter.",
     "columns": [
       { "name": "id",           "type": "integer", "primaryKey": true },
       { "name": "collector_id", "type": "integer", "notNull": true, "references": { "table": "collectors", "column": "id", "onDelete": "CASCADE" } },
       { "name": "user_id",      "type": "integer", "notNull": true, "references": { "table": "users",      "column": "id", "onDelete": "CASCADE" } },
       { "name": "token_hash",   "type": "text",    "notNull": true, "unique": true },
+      { "name": "mode",         "type": "text",    "notNull": true, "default": "rotating", "comment": "Refresh mode the token was issued under. Stored per token so an in-flight token keeps its original semantics if the collector's mode is later changed." },
       { "name": "issued_at",    "type": "integer", "notNull": true, "default": "now" },
       { "name": "expires_at",   "type": "integer", "notNull": true },
+      { "name": "last_used_at", "type": "integer" },
       { "name": "revoked",      "type": "integer", "notNull": true, "default": 0 },
       { "name": "reuse_count",  "type": "integer", "notNull": true, "default": 0 }
     ]

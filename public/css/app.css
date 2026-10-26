@@ -370,6 +370,15 @@ code, pre, .mono { font-family: var(--mono); }
   letter-spacing: .04em; color: var(--text-2); text-transform: uppercase;
 }
 
+/* Inline qualifier next to a label — e.g. the refresh mode beside the auth
+   method in the collector list. Lowercase so it reads as a modifier rather
+   than competing with the uppercase transport tag beside it. */
+.tag.sm {
+  padding: 1px 6px; font-size: 10.5px; font-weight: 500;
+  letter-spacing: .02em; text-transform: none;
+  border-color: var(--line-2); color: var(--text-3);
+}
+
 .status {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 3px 9px; border-radius: 999px;

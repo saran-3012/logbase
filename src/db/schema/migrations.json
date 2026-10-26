@@ -18,5 +18,19 @@
       "DROP TABLE IF EXISTS api_tokens",
       "DROP TABLE IF EXISTS oauth_clients"
     ]
+  },
+  {
+    "version": 3,
+    "type": "guardedColumns",
+    "description": "OAuth refresh mode — static refresh tokens alongside rotation",
+    "comment": "SQLite has no ADD COLUMN IF NOT EXISTS, and migrations run before the schema DDL — so on a fresh database these tables do not exist yet (compileSchema() creates them complete). 'guardedColumns' introspects first: a missing table is skipped, an existing column is skipped, and only a genuinely missing column is added. 'then' statements run only when every target table exists. Existing OAuth collectors are backfilled to 'rotating', preserving today's behaviour exactly.",
+    "columns": [
+      { "table": "collectors",           "column": { "name": "oauth_refresh_mode", "type": "text" } },
+      { "table": "oauth_refresh_tokens", "column": { "name": "mode",               "type": "text",    "notNull": true, "default": "rotating" } },
+      { "table": "oauth_refresh_tokens", "column": { "name": "last_used_at",       "type": "integer" } }
+    ],
+    "then": [
+      "UPDATE collectors SET oauth_refresh_mode = 'rotating' WHERE auth_method = 'oauth_client_credentials' AND oauth_refresh_mode IS NULL"
+    ]
   }
 ]

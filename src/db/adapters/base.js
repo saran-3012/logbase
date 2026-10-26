@@ -121,6 +121,19 @@ class BaseAdapter {
   }
 
   /**
+   * Describe the schema as it exists right now.
+   *
+   * Used by migration types that must branch on the live shape of the database
+   * (see 'guardedColumns'). Returns a plain map of table name → Set of column
+   * names. Tables that do not exist are simply absent from the map.
+   *
+   * @returns {Promise<Map<string, Set<string>>>}
+   */
+  async describeSchema() {
+    throw new Error(`${this.constructor.name} must implement describeSchema()`);
+  }
+
+  /**
    * Compile a single migration operation object into an array of DDL strings.
    *
    * Supported operation types:
@@ -132,13 +145,21 @@ class BaseAdapter {
    *   { type: 'raw',          statements: string[] }   — dialect-specific escape hatch;
    *                                                      statements run in order inside
    *                                                      the migration transaction
+   *   { type: 'guardedColumns', columns: [{ table, column }], then?: string[] }
+   *                                                    — additive columns that are skipped
+   *                                                      when the table is absent (fresh
+   *                                                      database: compileSchema() creates
+   *                                                      it complete) or the column already
+   *                                                      exists. Requires `schema`.
    *
    * Baseline-only entry (version 1 with no type) returns an empty array.
    *
    * @param {object} migration  — one entry from migrations.json
+   * @param {Map<string, Set<string>>} [schema]  — result of describeSchema(); required
+   *                                               by introspection-dependent types
    * @returns {string[]}
    */
-  compileMigration(migration) {
+  compileMigration(migration, schema) {
     throw new Error(`${this.constructor.name} must implement compileMigration()`);
   }
 }

@@ -163,6 +163,8 @@ const j = async (path, opts = {}) => {
   r = await j('/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ grant_type: 'client_credentials', client_id: cid, client_secret: csec }) });
   ok('oauth token issued', r.status === 200 && !!r.body.access_token, JSON.stringify(r.body));
+  ok('default refresh mode is rotating', r.body.refresh_token_mode === 'rotating',
+    JSON.stringify(r.body.refresh_token_mode));
   const at = r.body.access_token;
   const rt = r.body.refresh_token;
 
@@ -173,6 +175,108 @@ const j = async (path, opts = {}) => {
   r = await j('/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: rt }) });
   ok('refresh token rotates', r.status === 200 && !!r.body.access_token, JSON.stringify(r.body));
+  const rt2 = r.body.refresh_token;
+  ok('rotating mode returns a NEW refresh token', !!rt2 && rt2 !== rt);
+
+  // Replaying a consumed rotating token must revoke the whole family.
+  r = await j('/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: rt }) });
+  ok('rotating replay rejected', r.status === 401, JSON.stringify(r.body));
+
+  r = await j('/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: rt2 }) });
+  ok('rotating replay revokes the family', r.status === 401, JSON.stringify(r.body));
+
+  /* ── Static refresh tokens ──────────────────────────────────────────────── */
+  r = await j('/collectors', { method: 'POST', headers: auth, body: JSON.stringify({
+    name: 'oauth-static', transfer_type: 'http', auth_method: 'oauth_client_credentials',
+    input_format: 'json_array', oauth_refresh_mode: 'static' }) });
+  ok('create static-refresh oauth collector', r.status === 201, JSON.stringify(r.body));
+  ok('collector reports static mode', r.body.oauth_refresh_mode === 'static',
+    JSON.stringify(r.body.oauth_refresh_mode));
+  const sId   = r.body.id;
+  const sCid  = r.body.secrets && r.body.secrets.client_id;
+  const sCsec = r.body.secrets && r.body.secrets.client_secret;
+
+  r = await j('/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ grant_type: 'client_credentials', client_id: sCid, client_secret: sCsec }) });
+  ok('static: client_credentials issues a token', r.status === 200 && !!r.body.refresh_token,
+    JSON.stringify(r.body));
+  ok('static: response advertises the mode', r.body.refresh_token_mode === 'static',
+    JSON.stringify(r.body.refresh_token_mode));
+  const sRt = r.body.refresh_token;
+
+  // The defining behaviour: the same token is redeemable repeatedly and comes back unchanged.
+  for (const n of [1, 2, 3]) {
+    r = await j('/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: sRt }) });
+    ok(`static: redemption ${n} succeeds`, r.status === 200 && !!r.body.access_token,
+      JSON.stringify(r.body));
+    ok(`static: redemption ${n} returns the SAME refresh token`, r.body.refresh_token === sRt);
+  }
+
+  // The access token minted from a static refresh must actually work for ingest.
+  r = await j('/logs', { method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${r.body.access_token}` },
+    body: JSON.stringify([{ app: 'oa-static', level: 'info', message: 'via static refresh' }]) });
+  ok('static: refreshed access token ingests', r.status === 201 && r.body.inserted === 1,
+    JSON.stringify(r.body));
+
+  // Explicit revoke stops it, and must NOT be reported as token theft.
+  r = await j('/oauth/revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: sRt }) });
+  ok('static: revoke returns 200', r.status === 200, JSON.stringify(r.body));
+
+  r = await j('/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: sRt }) });
+  ok('static: revoked token rejected', r.status === 401, JSON.stringify(r.body));
+  ok('static: revoked token is not reported as theft',
+    !/theft/i.test(String(r.body && r.body.error_description)),
+    JSON.stringify(r.body && r.body.error_description));
+
+  /* ── Switching modes ────────────────────────────────────────────────────── */
+  r = await j('/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ grant_type: 'client_credentials', client_id: sCid, client_secret: sCsec }) });
+  const preSwitchRt = r.body.refresh_token;
+
+  r = await j(`/collectors/${sId}`, { method: 'PATCH', headers: auth,
+    body: JSON.stringify({ oauth_refresh_mode: 'rotating' }) });
+  ok('switch static -> rotating', r.status === 200 && r.body.oauth_refresh_mode === 'rotating',
+    JSON.stringify(r.body.oauth_refresh_mode));
+  ok('switch revokes outstanding tokens',
+    r.body.refresh_mode_change && r.body.refresh_mode_change.revoked_tokens >= 1,
+    JSON.stringify(r.body.refresh_mode_change));
+
+  r = await j('/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: preSwitchRt }) });
+  ok('pre-switch token no longer valid', r.status === 401, JSON.stringify(r.body));
+
+  // After re-authenticating, the collector now behaves as rotating.
+  r = await j('/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ grant_type: 'client_credentials', client_id: sCid, client_secret: sCsec }) });
+  const postSwitchRt = r.body.refresh_token;
+  ok('post-switch issues rotating tokens', r.body.refresh_token_mode === 'rotating',
+    JSON.stringify(r.body.refresh_token_mode));
+
+  r = await j('/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: postSwitchRt }) });
+  ok('post-switch refresh returns a new token',
+    r.status === 200 && r.body.refresh_token !== postSwitchRt, JSON.stringify(r.body));
+
+  /* ── Validation ─────────────────────────────────────────────────────────── */
+  r = await j('/collectors', { method: 'POST', headers: auth, body: JSON.stringify({
+    name: 'bad-mode', transfer_type: 'http', auth_method: 'oauth_client_credentials',
+    input_format: 'json_array', oauth_refresh_mode: 'nonsense' }) });
+  ok('unknown refresh mode rejected', r.status === 400, JSON.stringify(r.body));
+
+  r = await j('/collectors', { method: 'POST', headers: auth, body: JSON.stringify({
+    name: 'tok-mode', transfer_type: 'http', auth_method: 'api_token',
+    input_format: 'json_array', oauth_refresh_mode: 'static' }) });
+  ok('refresh mode rejected for api_token auth', r.status === 400, JSON.stringify(r.body));
+
+  r = await j(`/collectors/${arrId}`, { method: 'PATCH', headers: auth,
+    body: JSON.stringify({ oauth_refresh_mode: 'static' }) });
+  ok('refresh mode PATCH rejected on api_token collector', r.status === 400, JSON.stringify(r.body));
 
   // list
   r = await j('/collectors', { headers: auth });

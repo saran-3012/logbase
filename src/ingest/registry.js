@@ -26,6 +26,58 @@ const INPUT_FORMATS = {
   ndjson:     'Newline-delimited JSON — each line is one event',
 };
 
+/**
+ * Refresh-token behaviour for auth_method = 'oauth_client_credentials'.
+ *
+ *   rotating — every POST /oauth/token with grant_type=refresh_token consumes the
+ *              presented token and returns a new one. Replaying a consumed token
+ *              is treated as theft and revokes the whole family (OAuth 2.1 /
+ *              RFC 6819 §5.2.2.3 recommended behaviour).
+ *
+ *   static   — the refresh token is long-lived and reusable until it expires or
+ *              is revoked. The client stores one credential and never has to
+ *              persist a rotating value. Simpler for daemons and embedded
+ *              senders that cannot safely write state, at the cost of losing
+ *              replay detection.
+ */
+const OAUTH_REFRESH_MODES = {
+  rotating: {
+    label:       'Rotating refresh tokens',
+    short:       'Rotating',
+    description: 'Each refresh returns a new refresh token and invalidates the old one. Replay of a used token revokes every token for this collector.',
+    recommended: true,
+  },
+  static: {
+    label:       'Static refresh token',
+    short:       'Static',
+    description: 'One long-lived refresh token is reused until it expires or you revoke it. Easier for clients that cannot persist a changing credential; no replay detection.',
+    recommended: false,
+  },
+};
+
+const DEFAULT_OAUTH_REFRESH_MODE = 'rotating';
+
+/** @returns {boolean} whether the value is a known refresh mode. */
+function isRefreshMode(mode) {
+  return Object.prototype.hasOwnProperty.call(OAUTH_REFRESH_MODES, mode);
+}
+
+/** @returns {boolean} whether an auth method carries a refresh-mode setting. */
+function usesRefreshMode(authMethod) {
+  return authMethod === 'oauth_client_credentials';
+}
+
+/**
+ * Normalise the stored refresh mode for a collector row.
+ * A NULL column on an OAuth collector (pre-v3 rows) reads as 'rotating',
+ * which is exactly how those tokens were issued.
+ */
+function refreshModeOf(collector) {
+  if (!collector || !usesRefreshMode(collector.auth_method)) return null;
+  const mode = collector.oauth_refresh_mode;
+  return isRefreshMode(mode) ? mode : DEFAULT_OAUTH_REFRESH_MODE;
+}
+
 const CAPABILITIES = {
   http: {
     label:        'HTTP',
@@ -92,13 +144,47 @@ function validateCombination(transferType, authMethod, inputFormat) {
 }
 
 /**
+ * Validate a requested refresh mode against the chosen auth method.
+ *
+ * Returns the value to persist in collectors.oauth_refresh_mode:
+ *   - null for auth methods that have no refresh tokens
+ *   - the validated mode otherwise (defaulted when not supplied)
+ *
+ * @returns {{ ok: true, mode: string|null } | { ok: false, error: string }}
+ */
+function resolveRefreshMode(authMethod, requested) {
+  if (!usesRefreshMode(authMethod)) {
+    if (requested != null && requested !== '') {
+      return {
+        ok: false,
+        error: `oauth_refresh_mode only applies to auth_method "oauth_client_credentials", not "${authMethod}".`,
+      };
+    }
+    return { ok: true, mode: null };
+  }
+
+  if (requested == null || requested === '') {
+    return { ok: true, mode: DEFAULT_OAUTH_REFRESH_MODE };
+  }
+  if (!isRefreshMode(requested)) {
+    return {
+      ok: false,
+      error: `Unknown oauth_refresh_mode "${requested}". Supported: ${Object.keys(OAUTH_REFRESH_MODES).join(', ')}`,
+    };
+  }
+  return { ok: true, mode: requested };
+}
+
+/**
  * Serialisable capability matrix for the UI.
  */
 function capabilitiesPayload() {
   return {
-    transferTypes: TRANSFER_TYPES.map(t => ({ value: t, ...CAPABILITIES[t] })),
-    authMethods:   AUTH_METHODS,
-    inputFormats:  INPUT_FORMATS,
+    transferTypes:      TRANSFER_TYPES.map(t => ({ value: t, ...CAPABILITIES[t] })),
+    authMethods:        AUTH_METHODS,
+    inputFormats:       INPUT_FORMATS,
+    oauthRefreshModes:  OAUTH_REFRESH_MODES,
+    defaultRefreshMode: DEFAULT_OAUTH_REFRESH_MODE,
   };
 }
 
@@ -107,8 +193,14 @@ module.exports = {
   AUTH_METHODS,
   INPUT_FORMATS,
   CAPABILITIES,
+  OAUTH_REFRESH_MODES,
+  DEFAULT_OAUTH_REFRESH_MODE,
   isTransferType,
   capabilityOf,
   validateCombination,
+  isRefreshMode,
+  usesRefreshMode,
+  refreshModeOf,
+  resolveRefreshMode,
   capabilitiesPayload,
 };

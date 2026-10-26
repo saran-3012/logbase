@@ -11,7 +11,7 @@ A self-hosted log ingestion and monitoring server with a web UI, full-text searc
 - **Full-text search** — SQLite FTS5 across `app`, `level`, `message`, and all metadata fields
 - **Logs explorer** — level pills with live counts, a stacked event-volume histogram, time-range presets, app/collector filters, an event detail pane with the raw JSON, live tail, and NDJSON export
 - **24-hour retention** — configurable automatic purge
-- **OAuth 2.0** — Client Credentials grant with refresh token rotation and stolen-token detection
+- **OAuth 2.0** — Client Credentials grant with a choice of **rotating** (stolen-token detection) or **static** refresh tokens, selectable per collector
 - **API tokens** — simple static tokens for lightweight integrations
 
 ---
@@ -26,6 +26,60 @@ A **collector** is one configured way for logs to reach Logbase.
 | `udp` | `none` | `json_array`, `ndjson` | dedicated, from `UDP_PORT_RANGE` | **1 per user**, `UDP_MAX_LISTENERS` active server-wide |
 
 Create collectors in the dashboard under **Collectors**, or via `POST /collectors`. Credentials are shown **once** at creation (and on rotate) and are never recoverable afterwards.
+
+### Refresh token modes
+
+Collectors using `oauth_client_credentials` choose how refresh tokens behave via
+`oauth_refresh_mode`. The setting affects only the `refresh_token` grant — access
+tokens are identical in both modes.
+
+| Mode | Behaviour | Default TTL | Replay detection |
+|---|---|---|---|
+| `rotating` *(default)* | Each refresh consumes the presented token and returns a new one | `OAUTH_REFRESH_TOKEN_TTL` — 30 days | **Yes** — replaying a consumed token revokes every token for that collector |
+| `static` | The same refresh token is returned on every redemption and stays valid until it expires or is revoked | `OAUTH_STATIC_REFRESH_TOKEN_TTL` — 90 days | No |
+
+**Choose `rotating`** unless the client cannot persist a changing credential. It is
+the OAuth 2.1 / RFC 6819 §5.2.2.3 recommendation: a leaked token is detected the
+moment either party reuses it.
+
+**Choose `static`** for daemons, appliances and immutable-config deployments that
+read their credential from a file or secret store and cannot write a new one back.
+The trade-off is real: a leaked static token keeps working until it expires, and
+reuse cannot be distinguished from legitimate traffic.
+
+```bash
+# Create a collector that issues a static refresh token
+curl -X POST http://localhost:3000/collectors \
+  -H "Authorization: Bearer <session_jwt>" -H "Content-Type: application/json" \
+  -d '{"name":"appliance","transfer_type":"http",
+       "auth_method":"oauth_client_credentials",
+       "input_format":"ndjson","oauth_refresh_mode":"static"}'
+
+# Switch an existing collector between modes
+curl -X PATCH http://localhost:3000/collectors/<id> \
+  -H "Authorization: Bearer <session_jwt>" -H "Content-Type: application/json" \
+  -d '{"oauth_refresh_mode":"rotating"}'
+```
+
+Every token response reports the mode it was issued under:
+
+```json
+{
+  "access_token": "…", "token_type": "Bearer", "expires_in": 3600,
+  "refresh_token": "…", "refresh_token_expires_in": 7775999,
+  "refresh_token_mode": "static", "scope": "logs:write"
+}
+```
+
+Notes on switching modes:
+
+- A refresh token keeps the semantics it was **issued** under — the mode is stored
+  on the token, not read from the collector at redemption time.
+- Changing the mode therefore **revokes every outstanding refresh token** for that
+  collector, so clients must re-authenticate once with `client_credentials`. The
+  API returns a `refresh_mode_change` summary saying how many were revoked.
+- Rotating credentials (`POST /collectors/:id/rotate`) and deleting a collector
+  also revoke its refresh tokens.
 
 ### Input formats
 
@@ -244,6 +298,9 @@ For real UDP ingestion either:
 | `DB_ADAPTER` | `libsql` | Database adapter |
 | `TURSO_DATABASE_URL` | *(required)* | `libsql://…` or `file:./data/logs.db` |
 | `TURSO_AUTH_TOKEN` | — | Required for Turso cloud |
+| `OAUTH_ACCESS_TOKEN_TTL` | `3600` | OAuth access token lifetime (seconds) |
+| `OAUTH_REFRESH_TOKEN_TTL` | `2592000` | Refresh token lifetime in **rotating** mode (30 days) |
+| `OAUTH_STATIC_REFRESH_TOKEN_TTL` | `7776000` | Refresh token lifetime in **static** mode (90 days) |
 | `INGEST_BODY_LIMIT` | `10mb` | Max HTTP body on `/logs` |
 | `MAX_BATCH_SIZE` | `1000` | Max events per batch |
 | `PUBLIC_INGEST_HOST` | — | Host shown in dashboard snippets |
@@ -287,7 +344,7 @@ logbase/
 │       ├── auth.js                  # Register, login
 │       ├── collectors.js            # Collector CRUD, enable/disable, rotate, test
 │       ├── logs.js                  # Ingestion and retrieval
-│       └── oauth.js                 # Token issuance + rotation
+│       └── oauth.js                 # Token issuance — rotating + static refresh
 ├── public/
 │   ├── index.html                   # Sign in / create account
 │   ├── dashboard.html               # Logs explorer, collectors, new-collector wizard
@@ -338,6 +395,9 @@ logbase/
 | `POST` | `/oauth/revoke` | None | Revoke a refresh token (RFC 7009) |
 
 OAuth clients are created as collectors with `auth_method: "oauth_client_credentials"`.
+The `refresh_token` grant behaves according to the collector's
+[`oauth_refresh_mode`](#refresh-token-modes), and every response carries a
+`refresh_token_mode` field so clients can adapt without extra configuration.
 
 ### Logs
 
@@ -374,7 +434,7 @@ curl -X POST http://localhost:3000/logs \
 ### OAuth 2.0 (Client Credentials)
 
 ```bash
-# Step 1: access token (1h) + refresh token (30d)
+# Step 1: access token (1h) + refresh token
 curl -X POST http://localhost:3000/oauth/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=client_credentials&client_id=<id>&client_secret=<secret>"
@@ -385,11 +445,21 @@ curl -X POST http://localhost:3000/logs \
   -H "Content-Type: application/json" \
   --data-binary '[{"app":"my-service","level":"info","message":"Deployed"}]'
 
-# Step 3: refresh when it expires
+# Step 3: refresh when the access token expires
 curl -X POST http://localhost:3000/oauth/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=refresh_token&refresh_token=<refresh_token>"
 ```
+
+Step 3 depends on the collector's [refresh token mode](#refresh-token-modes):
+
+- **`rotating`** — a *new* `refresh_token` comes back. Persist it and discard the
+  old one; replaying a consumed token revokes the whole family.
+- **`static`** — the *same* `refresh_token` comes back. Store it once and reuse it
+  until it expires.
+
+Clients that always overwrite their stored refresh token from the response work
+correctly in both modes.
 
 ### Node.js
 
@@ -492,8 +562,10 @@ npm run db:reset  -- --turso --yes   # ⚠ wipes production
 
 - Passwords and OAuth client secrets are hashed with **bcrypt** (cost factor 12)
 - Refresh tokens are stored as **SHA-256 hashes** only — plain text is never persisted
-- Refresh token **rotation** is enforced — every use issues a new token and revokes the old one
-- Reuse of a revoked refresh token **revokes all tokens** for that collector (stolen-token detection)
+- Refresh token **rotation** is the default: every use issues a new token and revokes the old one
+- Under rotation, reuse of a revoked refresh token **revokes all tokens** for that collector (stolen-token detection)
+- `oauth_refresh_mode: "static"` opts out of rotation **and therefore out of replay detection** — a leaked static token stays usable until it expires or is revoked. Prefer `rotating` unless the client genuinely cannot store a changing credential
+- Changing a collector's refresh mode, rotating its credentials, or deleting it revokes all of its outstanding refresh tokens
 - Session tokens cannot be used for log ingestion — only API tokens and OAuth Bearer tokens are accepted on `POST /logs`
 - Disabling a collector immediately blocks HTTP ingestion (`403`) and closes any UDP socket
 - **UDP collectors are unauthenticated and unencrypted by design** — restrict them to trusted networks
